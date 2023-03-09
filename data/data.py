@@ -2,46 +2,39 @@
 Contains classes to represent protein + RNA data
 """
 import numpy as np
-import torch_geometric
-import torch.utils.data as data
+import pickle
+import torch
+import tqdm
 
-class ProteinStructureDataset(data.Dataset):
-    """
-    A 'torch.utils.data.Dataset' which converts list of dictionaries built in
-    process_data.py into protein graphs
-    # starting with simple coord info, will add atom featurizations,
-    # dihedrals, etc.
+class ProteinStructureDataset():
+    
+    def __init__(self, data_path):
 
-    Portions from https://github.com/drorlab/gvp-pytorch/blob/main/gvp/data.py
-    """
-
-    def __init__(self, data_list, device = "cpu"):
-
-        super(ProteinGraphDataset, self).__init__()
-
-        self.data_list = data_list
-        self.device = device
-
-    def __len__(self): return len(self.data_list)
-
-    def __getprotein__(self, i): return self.featurize_as_graph(self.data_list[i])
-
-    def __getmask__(self, i): return self.create_mask(self.data_list[i])
-
-    def featurize_as_graph(self, entry):
-
-        coords = torch.as_tensor(entry['coords'], 
-                        device=self.device, 
-                        dtype=torch.float32)   # shape (# of residues, 3)
-
-        data = torch_geometric.data.Data(x=coords)
-
-        return data
-
-    def create_mask(self, entry):
+        self.data = []
+        with open(data_path, 'rb') as f:
+            data = pickle.load(f)
         
-        mask = torch.as_tensor(np.array(entry['binary_mask']), 
-                        device=self.device, 
-                        dtype=torch.int32) # shape (# of residues,)
+        for entry in tqdm.tqdm(data, desc = 'data'):
+            if type(entry['target_coords']) != torch.Tensor:
+                entry['target_coords'] = torch.from_numpy(entry['target_coords']).float()
+            if type(entry['binary_mask']) != torch.Tensor:
+                entry['binary_mask'] = torch.tensor(entry['binary_mask']).int()
+            self.data.append(entry)
 
-        return mask
+    def __len__(self):
+        return len(self.data)
+
+    def __getitem__(self, idx):
+        return self.data[idx]
+
+    def prep_for_training(data):
+        N = max([len(entry['binary_mask']) for entry in data])
+        tgt_X = torch.zeros(len(data), N, 3)
+        tgt_mask = torch.zeros(len(data), N)
+        y = torch.zeros(len(data), N)
+        for i,b in enumerate(data):
+            L = len(b['target_coords'])
+            tgt_X[i,:L,:] = b['target_coords']
+            tgt_mask[i,:L] = 1
+            y[i,:L] = b['binary_mask']
+        return tgt_X, tgt_mask, y

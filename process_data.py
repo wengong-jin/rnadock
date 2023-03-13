@@ -66,7 +66,7 @@ def create_datapoint(filepath):
     print(target_coords.shape, rna_coords.shape, len(rna_seq))
 
     # don't use proteins with >2500 amino acids
-    if len(target_coords) > 2500:
+    if len(target_coords) > 500:
         raise Exception(f"{filepath} had more than 2500 residues")
 
     # compute binary mask

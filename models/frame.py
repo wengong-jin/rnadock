@@ -1,5 +1,6 @@
 import argparse
 import numpy as np
+import pandas as pd
 import random
 from sklearn.metrics import r2_score
 from sru import SRUpp
@@ -9,6 +10,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 import torch.optim as optim
 import torch.optim.lr_scheduler as lr_scheduler
+from binary_label_metrics import BinaryLabelMetrics
 
 sys.path.append("/home/dnori/rnadock/data")
 from data import ProteinStructureDataset
@@ -17,7 +19,7 @@ class RegressionModel(nn.Module):
 
     def __init__(self, args):
         super(RegressionModel, self).__init__()
-        self.mse_loss = nn.MSELoss()
+        self.blm = BinaryLabelMetrics()
         self.encoder = FAEncoder(args)
         self.linear_layers = nn.Sequential(
                 nn.Linear(args.hidden_size, args.hidden_size),
@@ -28,6 +30,7 @@ class RegressionModel(nn.Module):
                 nn.ReLU(),
                 nn.Linear(args.hidden_size, args.output_dim),
         )
+        torch.cuda.set_device(args.device)
 
     def mean(self, X, mask):
         return (X * mask[...,None]).sum(dim=1) / mask[...,None].sum(dim=1).clamp(min=1e-6)
@@ -35,8 +38,8 @@ class RegressionModel(nn.Module):
     def forward(self, X, mask, label):
         h = self.encoder(X, mask)
         h = self.mean(h, mask)
-        pred = self.linear_layers(h).squeeze(-1)
-        loss = self.mse_loss(pred, label)
+        pred = self.linear_layers(h).squeeze(-1).clamp(0,1)
+        loss = F.binary_cross_entropy(pred, label)
         return loss, pred
 
 
@@ -44,9 +47,10 @@ class FrameAveraging(nn.Module):
 
     def __init__(self):
         super(FrameAveraging, self).__init__()
+        torch.cuda.set_device("cuda:3")
         self.ops = torch.tensor([
                 [i,j,k] for i in [-1,1] for j in [-1,1] for k in [-1,1]
-        ])
+        ]).cuda()
 
     def create_frame(self, X, mask):
         mask = mask.unsqueeze(-1)
@@ -99,7 +103,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument('--hidden_size', type=int, default=5000)
     parser.add_argument('--depth', type=int, default=2)
-    parser.add_argument('--output_dim', type=int, default=2496)
+    parser.add_argument('--output_dim', type=int, default=500)
     parser.add_argument('--dropout', type=float, default=0.1)
     parser.add_argument('--lr', type=float, default=1e-3)
     parser.add_argument('--epochs', type=int, default=5)
@@ -107,6 +111,7 @@ if __name__ == "__main__":
     parser.add_argument('--anneal_rate', type=float, default=0.95)
     parser.add_argument('--batch_size', type=int, default=5)
     parser.add_argument('--clip_norm', type=float, default=1.0)
+    parser.add_argument('--device', type=str, default='cuda:3')
     args = parser.parse_args()
 
     torch.manual_seed(args.seed)
@@ -122,7 +127,7 @@ if __name__ == "__main__":
     # getting rid of some bad data points - fix later
     train_data = train_data[:20]
 
-    model = RegressionModel(args)
+    model = RegressionModel(args).cuda()
     optimizer = torch.optim.Adam(model.parameters(), lr=args.lr)
     scheduler = lr_scheduler.ExponentialLR(optimizer, args.anneal_rate)
 
@@ -131,23 +136,34 @@ if __name__ == "__main__":
         random.shuffle(train_data)
         for i in range(0, len(train_data), args.batch_size):
             optimizer.zero_grad()
-            tgt_X_batch = tgt_X[i : i + args.batch_size]
-            tgt_mask_batch = tgt_mask[i : i + args.batch_size]
-            y_batch = y[i : i + args.batch_size]
-            loss, pred = model(tgt_X_batch, tgt_mask_batch, y_batch)
-            print(f"Batch {i} R^2.")
-            pred = pred.detach().numpy()
-            pred = np.where(pred<0, 0, 1)
-            print(r2_score(y_batch.detach().numpy().astype(int), pred))
+            tgt_X_batch = tgt_X[i : i + args.batch_size].cuda()
+            tgt_mask_batch = tgt_mask[i : i + args.batch_size].cuda()
+            y_batch = y[i : i + args.batch_size].cuda()
+            loss, y_hat = model(tgt_X_batch, tgt_mask_batch, y_batch)
+            
+            y_batch = y_batch.reshape((y_batch.shape[0]*y_batch.shape[1],))
+            y_hat = y_hat.reshape((y_hat.shape[0]*y_hat.shape[1],))
+            scores_df = pd.DataFrame({'label':list(y_batch.cpu().detach().numpy()),'score':list(y_hat.cpu().detach().numpy())})
+            model.blm.add_model(f'batch_{i}_epoch_{e}', scores_df)
+            model.blm.plot_roc(model_names=[f'batch_{i}_epoch_{e}'],params={"save":True,"pfx":f"charts/batch_{i}_epoch_{e}"})
+
             loss.backward()
             nn.utils.clip_grad_norm_(model.parameters(), args.clip_norm)
             optimizer.step()
 
     val_X = tgt_X[int(.8 * len(tgt_X)):]
     val_mask = tgt_mask[int(.8 * len(tgt_X)):]
-    val_y = tgt_y[int(.8 * len(tgt_X)):]
+    val_y = y[int(.8 * len(tgt_X)):]
     _, pred = model(val_X, val_mask, val_y)
-    print("Validation R^2.")
-    pred = pred.detach().numpy()
-    pred = np.where(pred<0, 0, 1)
-    print(r2_score(val_y.detach().numpy(), pred))
+    scores_df = pd.DataFrame({'label':list(y_batch),'score':list(y_hat)})
+    model.blm.add_model('val', scores_df)
+    model.blm.plot_roc(model_names=['val'],params={"save":True,"pfx":"charts/val"})
+    
+    #report precision recall curve
+    #use roc-auc or F1 score (macro average) - concat all predictions for all proteins in test set; 
+    #compute AUC of long vector, skip things where y_true is all zeroes
+    #report F1 score which calibrated threshold - to say whether protein is RNA binding or not
+    #do hyperparameter sweep for MLP
+    #add protein amino acid sequence + ESM2 features
+    #model input (B, N, esm emb size, 3)
+    #get it on cuda

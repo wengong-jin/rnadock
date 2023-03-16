@@ -1,6 +1,7 @@
 """
 Contains classes to represent protein + RNA data
 """
+import Bio
 import numpy as np
 import pickle
 import torch
@@ -10,22 +11,23 @@ class ProteinStructureDataset():
     
     def __init__(self, data_path):
 
-        self.data = []
+        self.train_data = []
+        self.test_data = []
         with open(data_path, 'rb') as f:
             data = pickle.load(f)
         
+        i = 0
         for entry in tqdm.tqdm(data, desc = 'data'):
             if type(entry['target_coords']) != torch.Tensor:
                 entry['target_coords'] = torch.from_numpy(entry['target_coords']).float()
             if type(entry['binary_mask']) != torch.Tensor:
                 entry['binary_mask'] = torch.tensor(entry['binary_mask']).int()
-            self.data.append(entry)
-
-    def __len__(self):
-        return len(self.data)
-
-    def __getitem__(self, idx):
-        return self.data[idx]
+            if i < 0.7 * len(data):
+                self.train_data.append(entry)
+            else:
+                self.test_data.append(entry)
+            i += 1
+            
 
     def prep_for_training(data):
         N = max([len(entry['binary_mask']) for entry in data])

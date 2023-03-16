@@ -13,10 +13,10 @@ import pickle
 import urllib.request
 import tqdm
 
-amino_acids ={'VAL':'V', 'ILE':'I', 'LEU':'L', 'GLU':'E', 'GLN':'Q', \
-'ASP':'D', 'ASN':'N', 'HIS':'H', 'TRP':'W', 'PHE':'F', 'TYR':'Y',    \
-'ARG':'R', 'LYS':'K', 'SER':'S', 'THR':'T', 'MET':'M', 'ALA':'A',    \
-'GLY':'G', 'PRO':'P', 'CYS':'C'}
+protein_letters_3to1 = {'CYS': 'C', 'ASP': 'D', 'SER': 'S', 'GLN': 'Q', 'LYS': 'K',
+     'ILE': 'I', 'PRO': 'P', 'THR': 'T', 'PHE': 'F', 'ASN': 'N', 
+     'GLY': 'G', 'HIS': 'H', 'LEU': 'L', 'ARG': 'R', 'TRP': 'W', 
+     'ALA': 'A', 'VAL':'V', 'GLU': 'E', 'TYR': 'Y', 'MET': 'M'}
 
 nucleotides = ['A','U','C','G']
 
@@ -50,7 +50,7 @@ def bound_to_rna(rec_atom_coords, rna_coords_array):
     dists = np.sum(dists, axis=1)
     dists = np.sqrt(dists)
     
-    if np.min(dists) < 10:
+    if np.min(dists) < 7:
         return True
     else:
         return False
@@ -61,13 +61,14 @@ def create_datapoint(filepath):
     structure = pdb_file.get_structure()[0]
 
     target_coords = structure[structure.atom_name == 'CA'].coord
+    target_seq = structure[structure.atom_name == 'CA'].res_name
     rna_coords = structure[structure.atom_name == "C3\'"].coord
     rna_seq = structure[structure.atom_name == "C3\'"].res_name
     print(target_coords.shape, rna_coords.shape, len(rna_seq))
 
-    # don't use proteins with >2500 amino acids
+    # don't use proteins with >500 amino acids
     if len(target_coords) > 500:
-        raise Exception(f"{filepath} had more than 2500 residues")
+        raise Exception(f"{filepath} had more than 500 residues")
 
     # compute binary mask
     mask = [0 for i in range(len(target_coords))]
@@ -76,7 +77,18 @@ def create_datapoint(filepath):
         if bound_to_rna(rec_atom_coord, rna_coords):
             mask[j] = 1
 
-    return {'target_coords': target_coords, 'rna_seq': rna_seq, 'binary_mask': mask}
+    # modify target sequence (remove nonstandard amino acids)
+    try:
+        target_seq = ''.join([protein_letters_3to1[three_letter_code] for three_letter_code 
+                                                in target_seq.tolist()])
+    except Exception as e:
+        return None
+    
+    # filter out complexes where no alpha carbons are within 7 Angstroms of RNA
+    if sum (mask) > 0:
+        return {'target_coords': target_coords, 'rna_seq': rna_seq, 'target_seq':target_seq, 'binary_mask': mask}
+    else:
+        return None
     
 
 if __name__ == "__main__":
@@ -95,9 +107,12 @@ if __name__ == "__main__":
         # rna_seq, binary_mask
         try:
             entry = create_datapoint(filepath)
-            dataset.append(entry)
+            if entry:
+                dataset.append(entry)
+            else:
+                raise Exception(f"{filepath} has no alpha carbons within 7 Angstroms.")
             print(f"Successfully processed {filepath}.")
-        except:
+        except Exception as e:
             print(f"Error on {filepath}.")
 
     with open('dataset.pickle', 'wb') as handle:

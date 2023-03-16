@@ -531,7 +531,9 @@ class BinaryLabelMetrics:
         else:
             chart_types = list(filter(lambda x: x in [1, 2], chart_types))
         save = params.get("save", False)
+        print(save)
         pfx = params.get("prefix", "")
+        print(pfx)
         names = self._modname_sz if params.get("addsz", True) else self._modname
         plotthresh = params.get("showthresh", [])
         fs_ti = 17

@@ -69,7 +69,6 @@ class FrameAveraging(nn.Module):
         X = X + center.unsqueeze(1)
         return X * mask.unsqueeze(-1)
 
-
 class FAEncoder(FrameAveraging):
 
     def __init__(self, args):
@@ -109,23 +108,21 @@ if __name__ == "__main__":
     parser.add_argument('--epochs', type=int, default=5)
     parser.add_argument('--seed', type=int, default=7)
     parser.add_argument('--anneal_rate', type=float, default=0.95)
-    parser.add_argument('--batch_size', type=int, default=5)
+    parser.add_argument('--batch_size', type=int, default=8)
     parser.add_argument('--clip_norm', type=float, default=1.0)
     parser.add_argument('--device', type=str, default='cuda:3')
     args = parser.parse_args()
 
     torch.manual_seed(args.seed)
 
-    dataset = ProteinStructureDataset("dataset.pickle")
-    tgt_X, tgt_mask, y = ProteinStructureDataset.prep_for_training(dataset)
-
     # replace with a better split
-    train_data = dataset[:int(.8 * len(dataset))]
-    val_data = dataset[int(.8 * len(dataset)):]
-    print('Training/Val data:', len(train_data), len(val_data))
-
-    # getting rid of some bad data points - fix later
-    train_data = train_data[:20]
+    dataset = ProteinStructureDataset("dataset.pickle")
+    train_data = dataset.train_data
+    test_data = dataset.test_data
+    print('Train/test data:', len(train_data), len(test_data))
+    
+    coords_train, mask_train, y_train = ProteinStructureDataset.prep_for_training(train_data)
+    coords_test, mask_test, y_test = ProteinStructureDataset.prep_for_training(test_data)
 
     model = RegressionModel(args).cuda()
     optimizer = torch.optim.Adam(model.parameters(), lr=args.lr)
@@ -134,36 +131,41 @@ if __name__ == "__main__":
     for e in range(args.epochs):
         model.train()
         random.shuffle(train_data)
+        true_vals = []
+        pred_vals = []
         for i in range(0, len(train_data), args.batch_size):
+            print(f'batch_{i}_epoch_{e}')
             optimizer.zero_grad()
-            tgt_X_batch = tgt_X[i : i + args.batch_size].cuda()
-            tgt_mask_batch = tgt_mask[i : i + args.batch_size].cuda()
-            y_batch = y[i : i + args.batch_size].cuda()
+            try:
+                tgt_X_batch = coords_train[i : i + args.batch_size].cuda()
+                tgt_mask_batch = mask_train[i : i + args.batch_size].cuda()
+                y_batch = y_train[i : i + args.batch_size].cuda()
+            except:
+                tgt_X_batch = coords_train[i :].cuda()
+                tgt_mask_batch = mask_train[i :].cuda()
+                y_batch = y_train[i :].cuda()
             loss, y_hat = model(tgt_X_batch, tgt_mask_batch, y_batch)
             
             y_batch = y_batch.reshape((y_batch.shape[0]*y_batch.shape[1],))
             y_hat = y_hat.reshape((y_hat.shape[0]*y_hat.shape[1],))
-            scores_df = pd.DataFrame({'label':list(y_batch.cpu().detach().numpy()),'score':list(y_hat.cpu().detach().numpy())})
-            model.blm.add_model(f'batch_{i}_epoch_{e}', scores_df)
-            model.blm.plot_roc(model_names=[f'batch_{i}_epoch_{e}'],params={"save":True,"pfx":f"charts/batch_{i}_epoch_{e}"})
 
+            true_vals.extend(y_batch.cpu().detach().numpy().tolist())
+            pred_vals.extend(y_hat.cpu().detach().numpy().tolist())
+            
             loss.backward()
             nn.utils.clip_grad_norm_(model.parameters(), args.clip_norm)
             optimizer.step()
 
-    val_X = tgt_X[int(.8 * len(tgt_X)):]
-    val_mask = tgt_mask[int(.8 * len(tgt_X)):]
-    val_y = y[int(.8 * len(tgt_X)):]
-    _, pred = model(val_X, val_mask, val_y)
-    scores_df = pd.DataFrame({'label':list(y_batch),'score':list(y_hat)})
+        scores_df = pd.DataFrame({'label':true_vals,'score':pred_vals})
+        model.blm.add_model(f'epoch_{e}', scores_df)
+        model.blm.plot_roc(model_names=[f'epoch_{e}'],params={"save":True,"prefix":f"charts/epoch_{e}_"})
+
+    _, pred = model(coords_test, mask_test, y_test)
+    scores_df = pd.DataFrame({'label':list(y_test),'score':list(pred)})
     model.blm.add_model('val', scores_df)
-    model.blm.plot_roc(model_names=['val'],params={"save":True,"pfx":"charts/val"})
-    
-    #report precision recall curve
-    #use roc-auc or F1 score (macro average) - concat all predictions for all proteins in test set; 
-    #compute AUC of long vector, skip things where y_true is all zeroes
-    #report F1 score which calibrated threshold - to say whether protein is RNA binding or not
+    model.blm.plot_roc(model_names=['val'],params={"save":True,"prefix":"charts/val_"})
+
     #do hyperparameter sweep for MLP
+
     #add protein amino acid sequence + ESM2 features
     #model input (B, N, esm emb size, 3)
-    #get it on cuda

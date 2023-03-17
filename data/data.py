@@ -34,9 +34,11 @@ class ProteinStructureDataset():
         tgt_X = torch.zeros(len(data), N, 3)
         tgt_mask = torch.zeros(len(data), N)
         y = torch.zeros(len(data), N)
+        tgt_seqs = []
         for i,b in enumerate(data):
             L = len(b['target_coords'])
             tgt_X[i,:L,:] = b['target_coords']
             tgt_mask[i,:L] = 1
             y[i,:L] = b['binary_mask']
-        return tgt_X, tgt_mask, y
+            tgt_seqs.append(b['target_seq'])
+        return tgt_X, tgt_mask, tgt_seqs, y

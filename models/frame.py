@@ -24,20 +24,17 @@ class RegressionModel(nn.Module):
         self.blm = BinaryLabelMetrics()
         self.encoder = FAEncoder(args)
         self.linear_layers = nn.Sequential(
-                nn.Linear(args.input_size, args.hidden_size),
+                nn.Linear(args.mlp_input_size, args.mlp_hidden_size),
                 nn.ReLU(),
-                nn.Linear(args.hidden_size, args.hidden_size),
+                nn.Linear(args.mlp_hidden_size, args.mlp_hidden_size),
                 nn.ReLU(),
-                nn.Linear(args.hidden_size, args.output_dim),
-        ).double()
+                nn.Linear(args.mlp_hidden_size, args.mlp_output_dim),
+        )
         torch.cuda.set_device(args.device)
 
         self.esm_model, self.esm_alphabet = torch.hub.load("facebookresearch/esm:main", "esm2_t33_650M_UR50D")
         self.batch_converter = self.esm_alphabet.get_batch_converter()
         self.esm_model.eval()
-
-    def mean(self, X, mask):
-        return (X * mask[...,None]).sum(dim=1) / mask[...,None].sum(dim=1).clamp(min=1e-6)
 
     def forward(self, X, mask, seqs, label):
 
@@ -58,15 +55,11 @@ class RegressionModel(nn.Module):
                 results = self.esm_model(batch_tokens[i:i+1,:].cuda(), repr_layers=[33], return_contacts=True)
                 token_repr[i,:,:] = results["representations"][33][:,1:-1,:]
 
-        print(token_repr.shape)
-        print(label.shape)
-
-        #h = self.encoder(X, mask)
-        #h = self.mean(h, mask)
-        #h = torch.cat((h, seq_repr.cuda()),dim=1)
-        pred = self.linear_layers(token_repr.double().cuda()).squeeze(-1).clamp(0,1)
-        loss = F.binary_cross_entropy(pred.double(), label.double(), reduction = 'none')
-        print(torch.sum(pad_mask))
+        h = self.encoder(X, token_repr, pad_mask.cuda())
+        h = torch.cat((h,token_repr.cuda()),dim=-1)
+        print(h.shape)
+        pred = self.linear_layers(h.float()).squeeze(-1).clamp(0,1)
+        loss = F.binary_cross_entropy(pred, label, reduction = 'none')
         loss = (loss * pad_mask.cuda()).sum() / pad_mask.sum() #masking out padded residues
         return loss, pred
 
@@ -102,26 +95,27 @@ class FAEncoder(FrameAveraging):
         super(FAEncoder, self).__init__()
         self.encoder = SRUpp(
                 3,
-                args.hidden_size // 2,
-                args.hidden_size // 2,
+                args.encoder_hidden_size // 2,
+                args.encoder_hidden_size // 2,
                 num_layers=args.depth,
                 dropout=args.dropout,
                 bidirectional=True,
         )
 
-    def forward(self, X, mask):
+    def forward(self, X, h_S, mask):
         # X is shape (number in batch, max number of residues in protein, 3)
         B = X.shape[0] # number in batch
         N = X.shape[1] # max number of residues in protein
 
-        # X shape - (B, N, 3)
-        # token_repr shape - (B, N, esm emb sz 1280)
-
         h, _, _ = self.create_frame(X, mask)
         mask = mask.unsqueeze(1).expand(-1, 8, -1).reshape(B*8, N)
 
+        # h_S = torch.repeat_interleave(h_S, 8, dim=0).cuda().float()
+        # h = torch.cat((h_X.float(), h_S),dim=-1)
+        # print(h.shape)
+
         h, _, _ = self.encoder(
-                h.transpose(0, 1),
+                h.transpose(0, 1).float(),
                 mask_pad=(~mask.transpose(0, 1).bool())
         )
 
@@ -130,10 +124,12 @@ class FAEncoder(FrameAveraging):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument('--input_size', type=int, default=1280)
-    parser.add_argument('--hidden_size', type=int, default=200)
+    parser.add_argument('--encoder_input_size', type=int, default=1280)
+    parser.add_argument('--mlp_input_size', type=int, default=2280)
+    parser.add_argument('--encoder_hidden_size', type=int, default=1000)
+    parser.add_argument('--mlp_hidden_size', type=int, default=200)
     parser.add_argument('--depth', type=int, default=2)
-    parser.add_argument('--output_dim', type=int, default=1)
+    parser.add_argument('--mlp_output_dim', type=int, default=1)
     parser.add_argument('--dropout', type=float, default=0.1)
     parser.add_argument('--lr', type=float, default=1e-3)
     parser.add_argument('--epochs', type=int, default=5)

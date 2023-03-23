@@ -3,6 +3,8 @@ import numpy as np
 import pandas as pd
 import random
 from sklearn.metrics import r2_score
+from sklearn.metrics import roc_auc_score
+from sklearn.metrics import f1_score
 from sru import SRUpp
 import sys
 import torch
@@ -26,11 +28,9 @@ class RegressionModel(nn.Module):
                 nn.ReLU(),
                 nn.Linear(args.hidden_size, args.hidden_size),
                 nn.ReLU(),
-                nn.Linear(args.hidden_size, args.hidden_size),
-                nn.ReLU(),
                 nn.Linear(args.hidden_size, args.output_dim),
-        )
-        #torch.cuda.set_device(args.device)
+        ).double()
+        torch.cuda.set_device(args.device)
 
         self.esm_model, self.esm_alphabet = torch.hub.load("facebookresearch/esm:main", "esm2_t33_650M_UR50D")
         self.batch_converter = self.esm_alphabet.get_batch_converter()
@@ -43,29 +43,31 @@ class RegressionModel(nn.Module):
 
         # pad sequences till length 500, convert to batch
         esm_input = []
+        pad_mask = torch.from_numpy(np.ones((X.shape[0],500)))
         for s in range(len(seqs)):
             sequence = seqs[s] + "<pad>"*(500 - len(seqs[s]))
+            pad_mask[s,len(seqs[s]):] = 0
             esm_input.append((f"protein_{s}",sequence))
         batch_labels, batch_strs, batch_tokens = self.batch_converter(esm_input)
 
-        # per residue representation (CPU)
+        # per residue representation
         with torch.no_grad():
-            self.esm_model.cpu()
-            results = self.esm_model(batch_tokens, repr_layers=[33], return_contacts=True)
-            token_repr = results["representations"][33][:,1:-1,:]
+            self.esm_model.cuda()
+            token_repr = torch.from_numpy(np.zeros((batch_tokens.shape[0],500,1280)))
+            for i in range(len(batch_tokens)):
+                results = self.esm_model(batch_tokens[i:i+1,:].cuda(), repr_layers=[33], return_contacts=True)
+                token_repr[i,:,:] = results["representations"][33][:,1:-1,:]
 
-        sequence_representations = []
-        for i, (_, seq) in enumerate(esm_input):
-            sequence_representations.append(token_repr[i, 1 : len(seq) + 1].mean(0))
-        seq_repr = torch.stack(sequence_representations)
+        print(token_repr.shape)
+        print(label.shape)
 
-        h = self.encoder(X, mask)
-        h = self.mean(h, mask)
-        h = torch.cat((h, seq_repr.cuda()),dim=1)
-        print(h.shape)
-        
-        pred = self.linear_layers(h).squeeze(-1).clamp(0,1)
-        loss = F.binary_cross_entropy(pred, label)
+        #h = self.encoder(X, mask)
+        #h = self.mean(h, mask)
+        #h = torch.cat((h, seq_repr.cuda()),dim=1)
+        pred = self.linear_layers(token_repr.double().cuda()).squeeze(-1).clamp(0,1)
+        loss = F.binary_cross_entropy(pred.double(), label.double(), reduction = 'none')
+        print(torch.sum(pad_mask))
+        loss = (loss * pad_mask.cuda()).sum() / pad_mask.sum() #masking out padded residues
         return loss, pred
 
 class FrameAveraging(nn.Module):
@@ -128,10 +130,10 @@ class FAEncoder(FrameAveraging):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument('--input_size', type=int, default=4280)
-    parser.add_argument('--hidden_size', type=int, default=3000)
+    parser.add_argument('--input_size', type=int, default=1280)
+    parser.add_argument('--hidden_size', type=int, default=200)
     parser.add_argument('--depth', type=int, default=2)
-    parser.add_argument('--output_dim', type=int, default=500)
+    parser.add_argument('--output_dim', type=int, default=1)
     parser.add_argument('--dropout', type=float, default=0.1)
     parser.add_argument('--lr', type=float, default=1e-3)
     parser.add_argument('--epochs', type=int, default=5)
@@ -162,9 +164,9 @@ if __name__ == "__main__":
         random.shuffle(train_data)
         true_vals = []
         pred_vals = []
+        optimizer.zero_grad()
         for i in range(0, len(train_data), args.batch_size):
             print(f'batch_{i}_epoch_{e}')
-            optimizer.zero_grad()
             try:
                 tgt_X_batch = coords_train[i : i + args.batch_size].cuda()
                 tgt_mask_batch = mask_train[i : i + args.batch_size].cuda()
@@ -181,6 +183,8 @@ if __name__ == "__main__":
             y_batch = y_batch.reshape((y_batch.shape[0]*y_batch.shape[1],))
             y_hat = y_hat.reshape((y_hat.shape[0]*y_hat.shape[1],))
 
+            print(roc_auc_score(y_batch.cpu().detach().numpy(),y_hat.cpu().detach().numpy()))
+
             true_vals.extend(y_batch.cpu().detach().numpy().tolist())
             pred_vals.extend(y_hat.cpu().detach().numpy().tolist())
             
@@ -192,13 +196,12 @@ if __name__ == "__main__":
         model.blm.add_model(f'epoch_{e}', scores_df)
         model.blm.plot_roc(model_names=[f'epoch_{e}'],params={"save":True,"prefix":f"charts/epoch_{e}_"})
 
-    # this gets CUDA out of memory issue - do it in batches
-    # _, pred = model(coords_test.cuda(), mask_test.cuda(), y_test.cuda())
-    # scores_df = pd.DataFrame({'label':y_test.cpu().detach().numpy().tolist(),'score':pred.cpu().detach().numpy().tolist()})
-    # model.blm.add_model('val', scores_df)
-    # model.blm.plot_roc(model_names=['val'],params={"save":True,"prefix":"charts/val_"})
+    _, pred = model(coords_test.cuda(), mask_test.cuda(), seqs_test, y_test.cuda())
+    y_test = y_test.reshape((y_test.shape[0]*y_test.shape[1],))
+    pred = pred.reshape((pred.shape[0]*pred.shape[1],))
+    scores_df = pd.DataFrame({'label':y_test.cpu().detach().numpy().tolist(),'score':pred.cpu().detach().numpy().tolist()})
+    model.blm.add_model('val', scores_df)
+    model.blm.plot_roc(model_names=['val'],params={"save":True,"prefix":"charts/val_"})
 
-    #do hyperparameter sweep for MLP
-
-    #add protein amino acid sequence + ESM2 features
-    #model input (B, N, esm emb size, 3)
+    # to add back coord frame info - h_S (B, N, emb size), needs to become (B*8, N, emb size), concat with h_X
+    # eventually remove amino acid length filter

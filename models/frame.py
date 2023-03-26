@@ -17,10 +17,10 @@ from binary_label_metrics import BinaryLabelMetrics
 sys.path.append("/home/dnori/rnadock/data")
 from data import ProteinStructureDataset
 
-class RegressionModel(nn.Module):
+class ClassificationModel(nn.Module):
 
     def __init__(self, args):
-        super(RegressionModel, self).__init__()
+        super(ClassificationModel, self).__init__()
         self.blm = BinaryLabelMetrics()
         self.encoder = FAEncoder(args)
         self.linear_layers = nn.Sequential(
@@ -36,13 +36,12 @@ class RegressionModel(nn.Module):
         self.batch_converter = self.esm_alphabet.get_batch_converter()
         self.esm_model.eval()
 
-    def forward(self, X, mask, seqs, label):
+    def forward(self, X, seqs, label, max_seq_len):
 
-        # pad sequences till length 500, convert to batch
         esm_input = []
-        pad_mask = torch.from_numpy(np.ones((X.shape[0],500)))
+        pad_mask = torch.from_numpy(np.ones((X.shape[0],max_seq_len)))
         for s in range(len(seqs)):
-            sequence = seqs[s] + "<pad>"*(500 - len(seqs[s]))
+            sequence = seqs[s] + "<pad>"*(max_seq_len - len(seqs[s]))
             pad_mask[s,len(seqs[s]):] = 0
             esm_input.append((f"protein_{s}",sequence))
         batch_labels, batch_strs, batch_tokens = self.batch_converter(esm_input)
@@ -50,16 +49,16 @@ class RegressionModel(nn.Module):
         # per residue representation
         with torch.no_grad():
             self.esm_model.cuda()
-            token_repr = torch.from_numpy(np.zeros((batch_tokens.shape[0],500,1280)))
+            print(batch_tokens.shape[0])
+            token_repr = torch.from_numpy(np.zeros((batch_tokens.shape[0],max_seq_len,1280)))
             for i in range(len(batch_tokens)):
                 results = self.esm_model(batch_tokens[i:i+1,:].cuda(), repr_layers=[33], return_contacts=True)
                 token_repr[i,:,:] = results["representations"][33][:,1:-1,:]
 
         h = self.encoder(X, token_repr, pad_mask.cuda())
         h = torch.cat((h,token_repr.cuda()),dim=-1)
-        print(h.shape)
-        pred = self.linear_layers(h.float()).squeeze(-1).clamp(0,1)
-        loss = F.binary_cross_entropy(pred, label, reduction = 'none')
+        pred = self.linear_layers(h.float()).squeeze(-1)
+        loss = F.binary_cross_entropy_with_logits(pred, label, reduction = 'none')
         loss = (loss * pad_mask.cuda()).sum() / pad_mask.sum() #masking out padded residues
         return loss, pred
 
@@ -124,9 +123,8 @@ class FAEncoder(FrameAveraging):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument('--encoder_input_size', type=int, default=1280)
-    parser.add_argument('--mlp_input_size', type=int, default=2280)
-    parser.add_argument('--encoder_hidden_size', type=int, default=1000)
+    parser.add_argument('--mlp_input_size', type=int, default=1480)
+    parser.add_argument('--encoder_hidden_size', type=int, default=200)
     parser.add_argument('--mlp_hidden_size', type=int, default=200)
     parser.add_argument('--depth', type=int, default=2)
     parser.add_argument('--mlp_output_dim', type=int, default=1)
@@ -135,9 +133,9 @@ if __name__ == "__main__":
     parser.add_argument('--epochs', type=int, default=5)
     parser.add_argument('--seed', type=int, default=7)
     parser.add_argument('--anneal_rate', type=float, default=0.95)
-    parser.add_argument('--batch_size', type=int, default=8)
+    parser.add_argument('--batch_size', type=int, default=1)
     parser.add_argument('--clip_norm', type=float, default=1.0)
-    parser.add_argument('--device', type=str, default='cuda:3')
+    parser.add_argument('--device', type=str, default='cuda:1')
     args = parser.parse_args()
 
     torch.manual_seed(args.seed)
@@ -148,10 +146,13 @@ if __name__ == "__main__":
     test_data = dataset.test_data
     print('Train/test data:', len(train_data), len(test_data))
     
-    coords_train, mask_train, seqs_train, y_train = ProteinStructureDataset.prep_for_training(train_data)
-    coords_test, mask_test, seqs_test, y_test = ProteinStructureDataset.prep_for_training(test_data)
+    coords_train, seqs_train, y_train = ProteinStructureDataset.prep_for_training(train_data)
+    coords_test, seqs_test, y_test = ProteinStructureDataset.prep_for_training(test_data)
 
-    model = RegressionModel(args).cuda()
+    max_seq_len = max([len(seq) for seq in seqs_train+seqs_test])
+    print('Max seq len:', max_seq_len)
+
+    model = ClassificationModel(args).cuda()
     optimizer = torch.optim.Adam(model.parameters(), lr=args.lr)
     scheduler = lr_scheduler.ExponentialLR(optimizer, args.anneal_rate)
 
@@ -160,21 +161,19 @@ if __name__ == "__main__":
         random.shuffle(train_data)
         true_vals = []
         pred_vals = []
-        optimizer.zero_grad()
         for i in range(0, len(train_data), args.batch_size):
             print(f'batch_{i}_epoch_{e}')
+            optimizer.zero_grad()
             try:
                 tgt_X_batch = coords_train[i : i + args.batch_size].cuda()
-                tgt_mask_batch = mask_train[i : i + args.batch_size].cuda()
                 tgt_seq_batch = seqs_train[i : i+args.batch_size]
                 y_batch = y_train[i : i + args.batch_size].cuda()
             except:
                 tgt_X_batch = coords_train[i :].cuda()
-                tgt_mask_batch = mask_train[i :].cuda()
                 tgt_seq_batch = seqs_train[i :]
                 y_batch = y_train[i :].cuda()
 
-            loss, y_hat = model(tgt_X_batch, tgt_mask_batch, tgt_seq_batch, y_batch)
+            loss, y_hat = model(tgt_X_batch, tgt_seq_batch, y_batch, max_seq_len)
             
             y_batch = y_batch.reshape((y_batch.shape[0]*y_batch.shape[1],))
             y_hat = y_hat.reshape((y_hat.shape[0]*y_hat.shape[1],))
@@ -192,12 +191,22 @@ if __name__ == "__main__":
         model.blm.add_model(f'epoch_{e}', scores_df)
         model.blm.plot_roc(model_names=[f'epoch_{e}'],params={"save":True,"prefix":f"charts/epoch_{e}_"})
 
-    _, pred = model(coords_test.cuda(), mask_test.cuda(), seqs_test, y_test.cuda())
+    _, pred = model(coords_test.cuda(), seqs_test, y_test.cuda())
     y_test = y_test.reshape((y_test.shape[0]*y_test.shape[1],))
     pred = pred.reshape((pred.shape[0]*pred.shape[1],))
     scores_df = pd.DataFrame({'label':y_test.cpu().detach().numpy().tolist(),'score':pred.cpu().detach().numpy().tolist()})
     model.blm.add_model('val', scores_df)
     model.blm.plot_roc(model_names=['val'],params={"save":True,"prefix":"charts/val_"})
 
+    # look at pr curve
     # to add back coord frame info - h_S (B, N, emb size), needs to become (B*8, N, emb size), concat with h_X
-    # eventually remove amino acid length filter
+    # send results - then protein similarity split
+
+    # try 3B param ESM
+    # train more epochs, monitor loss on validation list
+
+    # at end - have train, validation, test
+    # run validation set at every epoch - 5 fold cross val (do cross val after debug code)
+
+
+

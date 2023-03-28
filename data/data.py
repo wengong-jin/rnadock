@@ -15,22 +15,20 @@ class ProteinStructureDataset():
         self.test_data = []
         with open(data_path, 'rb') as f:
             data = pickle.load(f)
+
+        cluster_representatives = list(set([d.get('cluster', None) for d in data]))
         
-        i = 0
         for entry in tqdm.tqdm(data, desc = 'data'):
             if type(entry['target_coords']) != torch.Tensor:
                 entry['target_coords'] = torch.from_numpy(entry['target_coords']).float()
             if type(entry['binary_mask']) != torch.Tensor:
                 entry['binary_mask'] = torch.tensor(entry['binary_mask']).int()
-            if i < 0.7 * len(data):
+            if cluster_representatives.index(entry['cluster']) < (0.8 * len(cluster_representatives)):
                 self.train_data.append(entry)
             else:
                 self.test_data.append(entry)
-            i += 1
-            
 
-    def prep_for_training(data):
-        N = max([len(entry['binary_mask']) for entry in data])
+    def prep_for_training(data, N):
         tgt_X = torch.zeros(len(data), N, 3)
         y = torch.zeros(len(data), N)
         tgt_seqs = []

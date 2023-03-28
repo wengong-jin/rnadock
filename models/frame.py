@@ -1,6 +1,8 @@
 import argparse
+import gzip
 import numpy as np
 import pandas as pd
+import pickle
 import random
 from sklearn.metrics import r2_score
 from sklearn.metrics import roc_auc_score
@@ -24,12 +26,12 @@ class ClassificationModel(nn.Module):
         self.blm = BinaryLabelMetrics()
         self.encoder = FAEncoder(args)
         self.linear_layers = nn.Sequential(
-                nn.Linear(args.mlp_input_size, args.mlp_hidden_size),
+                nn.Linear(args.esm_emb_size + args.encoder_hidden_size, args.mlp_hidden_size),
                 nn.ReLU(),
                 nn.Linear(args.mlp_hidden_size, args.mlp_hidden_size),
                 nn.ReLU(),
                 nn.Linear(args.mlp_hidden_size, args.mlp_output_dim),
-        )
+        ).cuda().float()
         torch.cuda.set_device(args.device)
 
         self.esm_model, self.esm_alphabet = torch.hub.load("facebookresearch/esm:main", "esm2_t33_650M_UR50D")
@@ -48,17 +50,17 @@ class ClassificationModel(nn.Module):
 
         # per residue representation
         with torch.no_grad():
-            self.esm_model.cuda()
-            print(batch_tokens.shape[0])
+            self.esm_model.to(torch.float16).cuda()
+
             token_repr = torch.from_numpy(np.zeros((batch_tokens.shape[0],max_seq_len,1280)))
             for i in range(len(batch_tokens)):
                 results = self.esm_model(batch_tokens[i:i+1,:].cuda(), repr_layers=[33], return_contacts=True)
                 token_repr[i,:,:] = results["representations"][33][:,1:-1,:]
 
-        h = self.encoder(X, token_repr, pad_mask.cuda())
+        h = self.encoder(X.cuda(), token_repr, pad_mask.cuda())
         h = torch.cat((h,token_repr.cuda()),dim=-1)
         pred = self.linear_layers(h.float()).squeeze(-1)
-        loss = F.binary_cross_entropy_with_logits(pred, label, reduction = 'none')
+        loss = F.binary_cross_entropy_with_logits(pred, label.cuda(), reduction = 'none')
         loss = (loss * pad_mask.cuda()).sum() / pad_mask.sum() #masking out padded residues
         return loss, pred
 
@@ -66,7 +68,6 @@ class FrameAveraging(nn.Module):
 
     def __init__(self):
         super(FrameAveraging, self).__init__()
-        torch.cuda.set_device("cuda:3")
         self.ops = torch.tensor([
                 [i,j,k] for i in [-1,1] for j in [-1,1] for k in [-1,1]
         ]).cuda()
@@ -93,29 +94,27 @@ class FAEncoder(FrameAveraging):
     def __init__(self, args):
         super(FAEncoder, self).__init__()
         self.encoder = SRUpp(
-                3,
+                args.esm_emb_size + 3,
                 args.encoder_hidden_size // 2,
                 args.encoder_hidden_size // 2,
                 num_layers=args.depth,
                 dropout=args.dropout,
                 bidirectional=True,
-        )
+        ).cuda().float()
 
     def forward(self, X, h_S, mask):
         # X is shape (number in batch, max number of residues in protein, 3)
         B = X.shape[0] # number in batch
         N = X.shape[1] # max number of residues in protein
 
-        h, _, _ = self.create_frame(X, mask)
+        h_X, _, _ = self.create_frame(X, mask)
+        h_S = h_S.unsqueeze(1).expand(-1, 8, -1, -1).reshape(B*8, N, -1)
         mask = mask.unsqueeze(1).expand(-1, 8, -1).reshape(B*8, N)
 
-        # h_S = torch.repeat_interleave(h_S, 8, dim=0).cuda().float()
-        # h = torch.cat((h_X.float(), h_S),dim=-1)
-        # print(h.shape)
-
+        h = torch.cat([h_X, h_S.cuda()], dim=-1)
         h, _, _ = self.encoder(
-                h.transpose(0, 1).float(),
-                mask_pad=(~mask.transpose(0, 1).bool())
+                h.transpose(0, 1).float().cuda(),
+                mask_pad=(~mask.transpose(0, 1).bool().cuda())
         )
 
         h = h.transpose(0, 1).view(B, 8, N, -1)
@@ -123,19 +122,19 @@ class FAEncoder(FrameAveraging):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument('--mlp_input_size', type=int, default=1480)
+    parser.add_argument('--esm_emb_size', type=int, default=1280)
     parser.add_argument('--encoder_hidden_size', type=int, default=200)
     parser.add_argument('--mlp_hidden_size', type=int, default=200)
     parser.add_argument('--depth', type=int, default=2)
     parser.add_argument('--mlp_output_dim', type=int, default=1)
     parser.add_argument('--dropout', type=float, default=0.1)
     parser.add_argument('--lr', type=float, default=1e-3)
-    parser.add_argument('--epochs', type=int, default=5)
+    parser.add_argument('--epochs', type=int, default=10)
     parser.add_argument('--seed', type=int, default=7)
     parser.add_argument('--anneal_rate', type=float, default=0.95)
     parser.add_argument('--batch_size', type=int, default=1)
     parser.add_argument('--clip_norm', type=float, default=1.0)
-    parser.add_argument('--device', type=str, default='cuda:1')
+    parser.add_argument('--device', type=str, default='cuda:0')
     args = parser.parse_args()
 
     torch.manual_seed(args.seed)
@@ -146,13 +145,14 @@ if __name__ == "__main__":
     test_data = dataset.test_data
     print('Train/test data:', len(train_data), len(test_data))
     
-    coords_train, seqs_train, y_train = ProteinStructureDataset.prep_for_training(train_data)
-    coords_test, seqs_test, y_test = ProteinStructureDataset.prep_for_training(test_data)
-
-    max_seq_len = max([len(seq) for seq in seqs_train+seqs_test])
+    max_seq_len = max([len(entry['binary_mask']) for entry in train_data+test_data])
     print('Max seq len:', max_seq_len)
 
-    model = ClassificationModel(args).cuda()
+    coords_train, seqs_train, y_train = ProteinStructureDataset.prep_for_training(train_data, max_seq_len)
+    coords_test, seqs_test, y_test = ProteinStructureDataset.prep_for_training(test_data, max_seq_len)
+
+
+    model = ClassificationModel(args)
     optimizer = torch.optim.Adam(model.parameters(), lr=args.lr)
     scheduler = lr_scheduler.ExponentialLR(optimizer, args.anneal_rate)
 
@@ -165,13 +165,13 @@ if __name__ == "__main__":
             print(f'batch_{i}_epoch_{e}')
             optimizer.zero_grad()
             try:
-                tgt_X_batch = coords_train[i : i + args.batch_size].cuda()
+                tgt_X_batch = coords_train[i : i + args.batch_size]
                 tgt_seq_batch = seqs_train[i : i+args.batch_size]
-                y_batch = y_train[i : i + args.batch_size].cuda()
+                y_batch = y_train[i : i + args.batch_size]
             except:
-                tgt_X_batch = coords_train[i :].cuda()
+                tgt_X_batch = coords_train[i :]
                 tgt_seq_batch = seqs_train[i :]
-                y_batch = y_train[i :].cuda()
+                y_batch = y_train[i :]
 
             loss, y_hat = model(tgt_X_batch, tgt_seq_batch, y_batch, max_seq_len)
             
@@ -181,7 +181,7 @@ if __name__ == "__main__":
             print(roc_auc_score(y_batch.cpu().detach().numpy(),y_hat.cpu().detach().numpy()))
 
             true_vals.extend(y_batch.cpu().detach().numpy().tolist())
-            pred_vals.extend(y_hat.cpu().detach().numpy().tolist())
+            pred_vals.extend(torch.sigmoid(y_hat).cpu().detach().numpy().tolist())
             
             loss.backward()
             nn.utils.clip_grad_norm_(model.parameters(), args.clip_norm)
@@ -191,22 +191,32 @@ if __name__ == "__main__":
         model.blm.add_model(f'epoch_{e}', scores_df)
         model.blm.plot_roc(model_names=[f'epoch_{e}'],params={"save":True,"prefix":f"charts/epoch_{e}_"})
 
-    _, pred = model(coords_test.cuda(), seqs_test, y_test.cuda())
-    y_test = y_test.reshape((y_test.shape[0]*y_test.shape[1],))
-    pred = pred.reshape((pred.shape[0]*pred.shape[1],))
-    scores_df = pd.DataFrame({'label':y_test.cpu().detach().numpy().tolist(),'score':pred.cpu().detach().numpy().tolist()})
+        with gzip.GzipFile("model.pkl.gz", mode="wb", compresslevel=6) as fil:
+            pickle.dump(model.blm, fil)
+
+    # hold out test set
+    true_vals_test = []
+    pred_vals_test = []
+    for i in range(0, len(test_data), args.batch_size):
+        tgt_X_batch = coords_test[i : i + args.batch_size]
+        tgt_seq_batch = seqs_test[i : i+args.batch_size]
+        y_batch = y_test[i : i + args.batch_size]
+
+        _, pred = model(tgt_X_batch.cuda(), tgt_seq_batch, y_batch.cuda(), max_seq_len)
+
+        y_batch = y_batch.reshape((y_batch.shape[0]*y_batch.shape[1],))
+        pred = pred.reshape((pred.shape[0]*pred.shape[1],))
+
+        true_vals_test.extend(y_batch.cpu().detach().numpy().tolist())
+        pred_vals_test.extend(torch.sigmoid(pred).cpu().detach().numpy().tolist())
+
+    scores_df = pd.DataFrame({'label':true_vals_test,'score':pred_vals_test})
     model.blm.add_model('val', scores_df)
     model.blm.plot_roc(model_names=['val'],params={"save":True,"prefix":"charts/val_"})
 
-    # look at pr curve
-    # to add back coord frame info - h_S (B, N, emb size), needs to become (B*8, N, emb size), concat with h_X
-    # send results - then protein similarity split
-
-    # try 3B param ESM
-    # train more epochs, monitor loss on validation list
-
-    # at end - have train, validation, test
+    #TODO
     # run validation set at every epoch - 5 fold cross val (do cross val after debug code)
+    # train more epochs, monitor loss on validation list
 
 
 

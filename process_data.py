@@ -57,6 +57,7 @@ def bound_to_rna(rec_atom_coords, rna_coords_array):
 
 def create_datapoint(filepath):
 
+
     pdb_file = pdb.PDBFile.read(filepath)
     structure = pdb_file.get_structure()[0]
 
@@ -64,10 +65,10 @@ def create_datapoint(filepath):
     target_seq = structure[structure.atom_name == 'CA'].res_name
     rna_coords = structure[structure.atom_name == "C3\'"].coord
     rna_seq = structure[structure.atom_name == "C3\'"].res_name
-    print(target_coords.shape, rna_coords.shape, len(rna_seq))
+    name = filepath[9:-4]
 
-    if len(target_coords) > 2000:
-        raise Exception(f"{filepath} had more than 2000 residues")
+    if len(target_coords) > 1500:
+        raise Exception(f"{filepath} had more than 1500 residues")
 
     # compute binary mask
     mask = [0 for i in range(len(target_coords))]
@@ -85,7 +86,7 @@ def create_datapoint(filepath):
     
     # filter out complexes where no alpha carbons are within 7 Angstroms of RNA
     if sum (mask) > 0:
-        return {'target_coords': target_coords, 'rna_seq': rna_seq, 'target_seq':target_seq, 'binary_mask': mask}
+        return {'target_coords': target_coords, 'rna_seq': rna_seq, 'target_seq':target_seq, 'binary_mask': mask, 'cluster':'na'}, name, target_seq
     else:
         return None
     
@@ -94,25 +95,51 @@ if __name__ == "__main__":
     pdb_out_dir = "data/pdb"
     data_csv = "data/select.csv"
 
-    #load_and_filter(data_csv, pdb_out_dir)
+    # load_and_filter(data_csv, pdb_out_dir)
 
     dirs = os.listdir(pdb_out_dir)
 
-    dataset = []
+    dataset = {}
+    list_seq = []
+    list_name = []
     for f in tqdm.tqdm(dirs, desc = 'dirs'):
         filepath = os.path.join(pdb_out_dir, f)
 
         # returns entry dict with keys target_coords,
         # rna_seq, binary_mask
         try:
-            entry = create_datapoint(filepath)
+            entry, name, seq = create_datapoint(filepath)
             if entry:
-                dataset.append(entry)
+                dataset[name] = entry
+                list_seq.append(seq)
+                list_name.append(name)
             else:
                 raise Exception(f"{filepath} has no alpha carbons within 7 Angstroms.")
             print(f"Successfully processed {filepath}.")
         except Exception as e:
             print(f"Error on {filepath}.")
 
+    ofile = open("data/fasta.txt", "w")
+    for i in range(len(list_seq)):
+        ofile.write(">" + list_name[i] + "\n" +list_seq[i] + "\n")
+    ofile.close()
+
+    os.system("mmseqs easy-cluster data/fasta.txt clusterRes tmp --min-seq-id 0.5 --cov-mode 1")
+
+    with open("clusterRes_all_seqs.fasta") as f:
+        lines = f.readlines()
+        current_cluster = lines[0][1:-1]
+        print(current_cluster)
+        for i in range(1, len(lines)-1):
+            if lines[i][0] == ">" and lines[i-1][0] == ">":
+                # new cluster label
+                current_cluster = lines[i-1][1:-1]
+                dataset[lines[i][1:-1]]["cluster"] = current_cluster
+            elif lines[i][0] == ">":
+                dataset[lines[i][1:-1]]["cluster"] = current_cluster
+            else:
+                pass
+
     with open('dataset.pickle', 'wb') as handle:
-        pickle.dump(dataset, handle)
+        pickle.dump(list(dataset.values()), handle)
+

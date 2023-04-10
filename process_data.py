@@ -11,6 +11,7 @@ import os
 import pandas as pd
 import pickle
 import urllib.request
+from scipy.spatial.distance import cdist
 import tqdm
 
 protein_letters_3to1 = {'CYS': 'C', 'ASP': 'D', 'SER': 'S', 'GLN': 'Q', 'LYS': 'K',
@@ -19,7 +20,6 @@ protein_letters_3to1 = {'CYS': 'C', 'ASP': 'D', 'SER': 'S', 'GLN': 'Q', 'LYS': '
      'ALA': 'A', 'VAL':'V', 'GLU': 'E', 'TYR': 'Y', 'MET': 'M'}
 
 nucleotides = ['A','U','C','G']
-
 
 def load_and_filter(csv_file, pdb_out_dir):
 
@@ -44,7 +44,7 @@ def load_and_filter(csv_file, pdb_out_dir):
 
     print(f"Saved {i} complexes in {pdb_out_dir}.")
 
-def bound_to_rna(rec_atom_coords, rna_coords_array):
+def bound(rec_atom_coords, rna_coords_array):
 
     dists = (rna_coords_array - rec_atom_coords)**2
     dists = np.sum(dists, axis=1)
@@ -65,17 +65,19 @@ def create_datapoint(filepath):
     target_seq = structure[structure.atom_name == 'CA'].res_name
     rna_coords = structure[structure.atom_name == "C3\'"].coord
     rna_seq = structure[structure.atom_name == "C3\'"].res_name
+    print(len(rna_seq))
     name = filepath[9:-4]
 
-    if len(target_coords) > 1500:
-        raise Exception(f"{filepath} had more than 1500 residues")
+    if len(target_coords) > 1500 or len(rna_coords) > 1000:
+        raise Exception(f"{filepath} had >1500 residues or >1000 nucleotides")
 
     # compute binary mask
     mask = [0 for i in range(len(target_coords))]
     for j in range(len(target_coords)):
         rec_atom_coord = target_coords[j]
-        if bound_to_rna(rec_atom_coord, rna_coords):
+        if bound(rec_atom_coord, rna_coords):
             mask[j] = 1
+    distances = cdist(target_coords, rna_coords) # number of protein coords x number of rna coords
 
     # modify target sequence (remove nonstandard amino acids)
     try:
@@ -86,13 +88,63 @@ def create_datapoint(filepath):
     
     # filter out complexes where no alpha carbons are within 7 Angstroms of RNA
     if sum (mask) > 0:
-        return {'target_coords': target_coords, 'rna_seq': rna_seq, 'target_seq':target_seq, 'binary_mask': mask, 'cluster':'na'}, name, target_seq
+        return {'target_coords': target_coords, 'rna_seq': rna_seq, 'rna_coords': rna_coords, 'target_seq':target_seq, 'binary_mask': mask, 'cluster':'na', 'pairwise_dists': distances}, name, target_seq
+    else:
+        return None
+
+def create_peptide_datapoint(filepath):
+
+
+    pdb_file = pdb.PDBFile.read(filepath)
+    structure = pdb_file.get_structure()[0]
+
+    chain_1, chain_2 = tuple(set(structure.chain_id))
+    chain_1 = structure[structure.chain_id == chain_1]
+    chain_2 = structure[structure.chain_id == chain_2]
+
+    chain1_seq = chain_1[chain_1.atom_name == 'CA'].res_name
+    chain2_seq = chain_2[chain_2.atom_name == 'CA'].res_name
+
+    if len(chain2_seq) < len(chain1_seq):
+        target_coords = chain_1[chain_1.atom_name == 'CA'].coord
+        target_seq = chain1_seq
+        peptide_coords = chain_2[chain_2.atom_name == 'CA'].coord
+        peptide_seq = chain2_seq
+    else:
+        peptide_coords = chain_1[chain_1.atom_name == 'CA'].coord
+        peptide_seq = chain1_seq
+        target_coords = chain_2[chain_2.atom_name == 'CA'].coord
+        target_seq = chain2_seq
+
+    name = filepath[13:17]
+    print(name)
+
+    if len(target_coords) > 1500:
+        raise Exception(f"{filepath} had >1500 residues")
+
+    # compute binary mask
+    mask = [0 for i in range(len(target_coords))]
+    for j in range(len(target_coords)):
+        rec_atom_coord = target_coords[j]
+        if bound(rec_atom_coord, peptide_coords):
+            mask[j] = 1
+    distances = cdist(target_coords, peptide_coords) # number of protein coords x number of peptide coords
+
+    # modify target sequence (remove nonstandard amino acids)
+    try:
+        target_seq = ''.join([protein_letters_3to1[three_letter_code] for three_letter_code 
+                                                in target_seq.tolist()])
+    except Exception as e:
+        return None
+    
+    # filter out complexes where no alpha carbons are within 7 Angstroms of RNA
+    if sum (mask) > 0:
+        return {'target_coords': target_coords, 'peptide_seq': peptide_seq, 'peptide_coords': peptide_coords, 'target_seq':target_seq, 'binary_mask': mask, 'cluster':'na', 'pairwise_dists': distances}, name, target_seq
     else:
         return None
     
-
 if __name__ == "__main__":
-    pdb_out_dir = "data/pdb"
+    pdb_out_dir = "data/complex"
     data_csv = "data/select.csv"
 
     # load_and_filter(data_csv, pdb_out_dir)
@@ -108,7 +160,7 @@ if __name__ == "__main__":
         # returns entry dict with keys target_coords,
         # rna_seq, binary_mask
         try:
-            entry, name, seq = create_datapoint(filepath)
+            entry, name, seq = create_peptide_datapoint(filepath)
             if entry:
                 dataset[name] = entry
                 list_seq.append(seq)
@@ -118,13 +170,14 @@ if __name__ == "__main__":
             print(f"Successfully processed {filepath}.")
         except Exception as e:
             print(f"Error on {filepath}.")
+            print(e)
 
-    ofile = open("data/fasta.txt", "w")
+    ofile = open("data/fasta_peptide.txt", "w")
     for i in range(len(list_seq)):
         ofile.write(">" + list_name[i] + "\n" +list_seq[i] + "\n")
     ofile.close()
 
-    os.system("mmseqs easy-cluster data/fasta.txt clusterRes tmp --min-seq-id 0.5 --cov-mode 1")
+    os.system("mmseqs easy-cluster data/fasta_peptide.txt clusterRes tmp --min-seq-id 0.5 --cov-mode 1")
 
     with open("clusterRes_all_seqs.fasta") as f:
         lines = f.readlines()
@@ -139,7 +192,8 @@ if __name__ == "__main__":
                 dataset[lines[i][1:-1]]["cluster"] = current_cluster
             else:
                 pass
-
-    with open('dataset.pickle', 'wb') as handle:
+    
+    #peptide dataset
+    with open('dataset_peptide.pickle', 'wb') as handle:
         pickle.dump(list(dataset.values()), handle)
 

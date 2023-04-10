@@ -1,2 +1,7 @@
 # ignore all pdb files
 *.pdb
+*.png
+*.pyc
+*.gz
+*.pickle
+*.fasta

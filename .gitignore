@@ -5,3 +5,6 @@
 *.gz
 *.pickle
 *.fasta
+*.tsv
+*.pt
+*.txt

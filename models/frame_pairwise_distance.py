@@ -36,7 +36,7 @@ class PairwiseDistanceModel(nn.Module):
         self.batch_converter = self.esm_alphabet.get_batch_converter()
         self.esm_model.eval()
 
-    def forward(self, prot_X, rna_X, seqs, rna_seqs, label, max_prot_seq_len, max_rna_seq_len):
+    def forward(self, prot_X_batch, peptide_X_batch, prot_seq_batch, peptide_seq_batch, y_batch, max_prot_coords, max_peptide_coords, loss_positive_weight):
 
         # prot_X: (batch sz, max prot seq len, 3)
         # rna_X: (batch sz, max rna seq len, 3)
@@ -70,8 +70,8 @@ class PairwiseDistanceModel(nn.Module):
         h_rna = self.rna_encoder(rna_X.cuda(), mask=rna_pad_mask.cuda()) #h_rna: (batch sz, max rna seq len, encoder hidden dim)
 
         # flatten the encoded sequences and concatenate them
-        h_prot = h_prot.reshape(h_prot.shape[0], h_prot.shape[1], 1, h_prot.shape[2]).detach().cpu().numpy()  # shape: (batch_sz, max_prot_seq_len, 1, encoder_hidden_dim)
-        h_rna = h_rna.reshape(h_rna.shape[0], 1, h_rna.shape[1], h_rna.shape[2]).detach().cpu().numpy()  # shape: (batch_sz, 1, max_rna_seq_len, encoder_hidden_dim)
+        h_prot = h_prot.reshape(h_prot.shape[0], h_prot.shape[1], 1, h_prot.shape[2]).detach().cpu()  # shape: (batch_sz, max_prot_seq_len, 1, encoder_hidden_dim)
+        h_rna = h_rna.reshape(h_rna.shape[0], 1, h_rna.shape[1], h_rna.shape[2]).detach().cpu()  # shape: (batch_sz, 1, max_rna_seq_len, encoder_hidden_dim)
         h = torch.from_numpy(np.concatenate((h_prot.repeat(h_rna.shape[2], axis=2), h_rna.repeat(h_prot.shape[1], axis=1)), axis=-1)).cuda().view(1, -1, 2*args.encoder_hidden_size)  # shape: (batch_sz, max_prot_seq_len * max_rna_seq_len, 2*encoder_hidden_dim)
         print(torch.max(h))
         print(torch.min(h))
@@ -256,3 +256,8 @@ if __name__ == "__main__":
 
     # r2_df = pd.DataFrame(r2_dict)
     # r2_df.to_csv('charts/r2_metric.csv', index=False, header=True)
+
+    # change to multiclass (cap at 20 angstroms, 20-class) - take expected value over the predicted probability distribution (weighted average over softmax of logits)
+    # can use mse instead of r2
+
+    # don't convert tensor to numpy in training (autograd doesn't work, treats as constant array); can have tensor on cpu

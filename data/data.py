@@ -22,8 +22,8 @@ class ProteinStructureDataset():
         for entry in tqdm.tqdm(data, desc = 'data'):
             if type(entry['target_coords']) != torch.Tensor:
                 entry['target_coords'] = torch.from_numpy(entry['target_coords']).float()
-            if type(entry['rna_coords']) != torch.Tensor:
-                entry['rna_coords'] = torch.from_numpy(entry['rna_coords']).float()
+            if type(entry['ligand_coords']) != torch.Tensor:
+                entry['ligand_coords'] = torch.from_numpy(entry['ligand_coords']).float()
             if type(entry['binary_mask']) != torch.Tensor:
                 entry['binary_mask'] = torch.tensor(entry['binary_mask']).int()
             if type(entry['pairwise_dists']) != torch.Tensor:
@@ -52,7 +52,7 @@ class ProteinStructureDataset():
             tgt_X[i,:L,:] = b['target_coords']
             y[i,:L] = b['binary_mask']
             tgt_seqs.append(b['target_seq'])
-            rna_seqs.append(b['rna_seq']) #change rna seq name so same code used
+            rna_seqs.append(b['ligand_seq']) #change rna seq name so same code used
         return tgt_X, tgt_seqs, y
 
     # A = max_num_protein_coords
@@ -65,11 +65,11 @@ class ProteinStructureDataset():
         rna_seqs = []
         for i, b in enumerate(data):
             P = len(b['target_coords'])
-            R = len(b['rna_coords'])
+            R = len(b['ligand_coords'])
             protein_X[i, :P, :] = b['target_coords']
-            rna_X[i, :R, :] = b['rna_coords']
-            y[i, :P, :R] = torch.nn.functional.normalize(b['pairwise_dists']) #normalize dists for each complex
+            rna_X[i, :R, :] = b['ligand_coords']
+            y[i, :P, :R] = b['pairwise_dists'] # torch.nn.functional.normalize(b['pairwise_dists']) #normalize dists for each complex
             prot_seqs.append(b['target_seq'])
-            rna_seqs.append(b['rna_seq'])
+            rna_seqs.append(b['ligand_seq'])
         return protein_X, rna_X, y, prot_seqs, rna_seqs
 

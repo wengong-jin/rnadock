@@ -50,7 +50,7 @@ def bound(rec_atom_coords, rna_coords_array):
     dists = np.sum(dists, axis=1)
     dists = np.sqrt(dists)
     
-    if np.min(dists) < 7:
+    if np.min(dists) < 10:
         return True
     else:
         return False
@@ -88,7 +88,7 @@ def create_datapoint(filepath):
     
     # filter out complexes where no alpha carbons are within 7 Angstroms of RNA
     if sum (mask) > 0:
-        return {'target_coords': target_coords, 'rna_seq': rna_seq, 'rna_coords': rna_coords, 'target_seq':target_seq, 'binary_mask': mask, 'cluster':'na', 'pairwise_dists': distances}, name, target_seq
+        return {'target_coords': target_coords, 'ligand_seq': rna_seq, 'ligand_coords': rna_coords, 'target_seq':target_seq, 'binary_mask': mask, 'cluster':'na', 'pairwise_dists': distances}, name, target_seq
     else:
         return None
 
@@ -116,11 +116,11 @@ def create_peptide_datapoint(filepath):
         target_coords = chain_2[chain_2.atom_name == 'CA'].coord
         target_seq = chain2_seq
 
-    name = filepath[13:17]
+    name = filepath[13:-4]
     print(name)
 
-    if len(target_coords) > 1500:
-        raise Exception(f"{filepath} had >1500 residues")
+    if len(target_coords) > 1200:
+        raise Exception(f"{filepath} had >1200 residues")
 
     # compute binary mask
     mask = [0 for i in range(len(target_coords))]
@@ -134,12 +134,14 @@ def create_peptide_datapoint(filepath):
     try:
         target_seq = ''.join([protein_letters_3to1[three_letter_code] for three_letter_code 
                                                 in target_seq.tolist()])
+        peptide_seq = ''.join([protein_letters_3to1[three_letter_code] for three_letter_code 
+                                                in peptide_seq.tolist()])
     except Exception as e:
         return None
     
-    # filter out complexes where no alpha carbons are within 7 Angstroms of RNA
+    # filter out complexes where no alpha carbons are within 10 Angstroms of RNA
     if sum (mask) > 0:
-        return {'target_coords': target_coords, 'peptide_seq': peptide_seq, 'peptide_coords': peptide_coords, 'target_seq':target_seq, 'binary_mask': mask, 'cluster':'na', 'pairwise_dists': distances}, name, target_seq
+        return {'target_coords': target_coords, 'ligand_seq': peptide_seq, 'ligand_coords': peptide_coords, 'target_seq':target_seq, 'binary_mask': mask, 'cluster':'na', 'pairwise_dists': distances}, name, target_seq
     else:
         return None
     
@@ -166,7 +168,7 @@ if __name__ == "__main__":
                 list_seq.append(seq)
                 list_name.append(name)
             else:
-                raise Exception(f"{filepath} has no alpha carbons within 7 Angstroms.")
+                raise Exception(f"{filepath} has no alpha carbons within 10 Angstroms.")
             print(f"Successfully processed {filepath}.")
         except Exception as e:
             print(f"Error on {filepath}.")
@@ -196,4 +198,7 @@ if __name__ == "__main__":
     #peptide dataset
     with open('dataset_peptide.pickle', 'wb') as handle:
         pickle.dump(list(dataset.values()), handle)
+
+
+# first letter is peptide, second letter is receptor
 

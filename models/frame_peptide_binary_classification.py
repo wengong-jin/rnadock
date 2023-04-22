@@ -36,7 +36,7 @@ class PeptideClassificationModel(nn.Module):
                 nn.ReLU(),
                 nn.Linear(args.mlp_hidden_size, args.mlp_output_dim),
         ).cuda().float()
-        torch.cuda.set_device(args.device)
+        #torch.cuda.set_device(args.device)
         self.esm_model, self.esm_alphabet = torch.hub.load("facebookresearch/esm:main", "esm2_t33_650M_UR50D")
         self.batch_converter = self.esm_alphabet.get_batch_converter()
         self.esm_model.eval()
@@ -54,7 +54,7 @@ class PeptideClassificationModel(nn.Module):
         pad_mask_peptide = torch.from_numpy(np.ones((peptide_X.shape[0],max_peptide_seq_len)))
         for s in range(len(peptide_seqs)):
             sequence = peptide_seqs[s] + "<pad>"*(max_peptide_seq_len - len(peptide_seqs[s]))
-            pad_mask_peptide[s,len(seqs[s]):] = 0
+            pad_mask_peptide[s,len(peptide_seqs[s]):] = 0
             esm_input_peptide.append((f"peptide_{s}",sequence))
         batch_labels_peptide, batch_strs_peptide, batch_tokens_peptide = self.batch_converter(esm_input_peptide)
 
@@ -64,14 +64,16 @@ class PeptideClassificationModel(nn.Module):
 
             token_repr = torch.from_numpy(np.zeros((batch_tokens.shape[0],max_prot_seq_len,1280)))
             for i in range(len(batch_tokens)):
-                results = self.esm_model(batch_tokens[i:i+1,:].cuda(), repr_layers=[33], return_contacts=True)
+                results = self.esm_model(batch_tokens[i:i+1,:].cuda(), repr_layers=[33], return_contacts=True) #.cuda()
                 token_repr[i,:,:] = results["representations"][33][:,1:-1,:]
 
             token_repr_peptide = torch.from_numpy(np.zeros((batch_tokens_peptide.shape[0],max_peptide_seq_len,1280)))
             for i in range(len(batch_tokens_peptide)):
-                results_peptide = self.esm_model(batch_tokens_peptide[i:i+1,:].cuda(), repr_layers=[33], return_contacts=True)
+                results_peptide = self.esm_model(batch_tokens_peptide[i:i+1,:].cuda(), repr_layers=[33], return_contacts=True) #.cuda()
                 token_repr_peptide[i,:,:] = results_peptide["representations"][33][:,1:-1,:]
 
+        self.protein_encoder.cuda()
+        self.peptide_encoder.cuda()
         h_prot = self.protein_encoder(prot_X.cuda(), h_S=token_repr, mask=pad_mask.cuda()) # h_prot: (batch sz, max prot seq len, encoder hidden dim)
         h_pep = self.peptide_encoder(peptide_X.cuda(), h_S=token_repr_peptide, mask=pad_mask_peptide.cuda()) #h_peptide: (batch sz, max peptide seq len, encoder hidden dim)
 
@@ -88,11 +90,12 @@ class PeptideClassificationModel(nn.Module):
         label = torch.from_numpy(y_batch).view(-1)
         mask = torch.unsqueeze(torch.mm(pad_mask.T, pad_mask_peptide).flatten(), dim=0)
         
+        self.linear_layers.cuda()
         pred = self.linear_layers(h.float()).squeeze()
         #loss = F.cross_entropy(pred, label.cuda(), reduction = 'none') # pred is logits, label is OHE
         loss = F.binary_cross_entropy_with_logits(pred, label.cuda(), reduction = 'none')
         loss = (loss * mask.cuda()).sum() / mask.sum() #masking out padded residues
-        return loss, pred, label
+        return loss, pred, label, mask
 
 class FrameAveraging(nn.Module):
 
@@ -183,10 +186,15 @@ if __name__ == "__main__":
     dataset = ProteinStructureDataset("dataset_peptide.pickle")
     train_data = dataset.train_data
     test_data = dataset.test_data
+    # cut off data for now
+    train_data = train_data[:200]
+    test_data = test_data[:100]
     print('Train/test data:', len(train_data), len(test_data))
     
-    max_prot_coords = max([len(entry['target_coords']) for entry in train_data+test_data])
-    max_peptide_coords = max([len(entry['ligand_coords']) for entry in train_data+test_data])
+    prot_len_lst = [len(entry['target_coords']) for entry in train_data+test_data]
+    max_prot_coords = max(prot_len_lst)
+    peptide_len_lst = [len(entry['ligand_coords']) for entry in train_data+test_data]
+    max_peptide_coords = max(peptide_len_lst)
     print('Max protein len:', max_prot_coords)
     print('Max peptide len:', max_peptide_coords)
 
@@ -202,9 +210,9 @@ if __name__ == "__main__":
     # y_train = np.where(y_train < 10, 0, np.where(y_train > 20, 2, 1))
     # y_test = np.where(y_test < 10, 0, np.where(y_test > 20, 2, 1))
 
-    # cast to binary problem
-    y_train = np.where(y_train < 10, 1., 0.)
-    y_test = np.where(y_test < 10, 1., 0.)
+    # cast to binary problem, exclude padded residues
+    y_train = np.where((y_train < 10) & (y_train != 0), 1., 0.)
+    y_test = np.where((y_test < 10) & (y_test != 0), 1., 0.)
 
     model = PeptideClassificationModel(args)
     optimizer = torch.optim.Adam(model.parameters(), lr=args.lr)
@@ -231,14 +239,29 @@ if __name__ == "__main__":
                 peptide_seq_batch = peptide_seqs_train[i :]
                 y_batch = y_train[i :]
 
-            loss, y_hat, y_batch = model(prot_X_batch, peptide_X_batch, prot_seq_batch, peptide_seq_batch, y_batch, max_prot_coords, max_peptide_coords)
+            loss, y_hat, y_batch, mask = model(prot_X_batch, peptide_X_batch, prot_seq_batch, peptide_seq_batch, y_batch, max_prot_coords, max_peptide_coords)
+            y_hat = torch.sigmoid(y_hat)
             # y_hat = torch.argmax(y_hat, dim=1)
 
-            # print(f1_score(y_batch.cpu().detach().numpy(),y_hat.cpu().detach().numpy(), average='macro'))
-            print(roc_auc_score(y_batch.cpu().detach().numpy(),y_hat.cpu().detach().numpy()))
+            square = (max_prot_coords, max_peptide_coords)
+            protein_mask = np.invert(np.all((mask.T.squeeze().reshape(square) == 0).cpu().detach().numpy(), axis=1)) # if all zero, set to False (protein residue nonexistent)
 
-            true_vals.extend(y_batch.cpu().detach().numpy().tolist())
-            pred_vals.extend(y_hat.cpu().detach().numpy().tolist())
+            masked_y_hat = np.ma.masked_where(~mask.T.squeeze().reshape(square).cpu().detach().numpy().astype(bool), 
+                                                y_hat.reshape(square).cpu().detach().numpy())
+            y_hat = masked_y_hat.mean(axis=1) # for y_hat, just take average probability value
+            y_hat = y_hat[y_hat.mask == False]
+
+            y_batch = np.any((y_batch.reshape(square) == 1.).cpu().detach().numpy(), axis=1).astype(int)
+            y_batch = y_batch[protein_mask]
+
+            print(y_hat.shape)
+            print(y_batch.shape)
+
+            # print(f1_score(y_batch.cpu().detach().numpy(),y_hat.cpu().detach().numpy(), average='macro'))
+            print(roc_auc_score(y_batch,y_hat))
+
+            true_vals.extend(y_batch.tolist())
+            pred_vals.extend(y_hat.tolist())
             
             loss.backward()
             nn.utils.clip_grad_norm_(model.parameters(), args.clip_norm)
@@ -272,7 +295,7 @@ if __name__ == "__main__":
         # plt.title("Precision-Recall curve")
         # plt.savefig(f"charts/epoch_{e}_pr.png")
 
-        filename = f'model_checkpoints/peptide_model_multiclass_epoch_{e}.pt'
+        filename = f'model_checkpoints/peptide_model_binary_epoch_{e}.pt'
         torch.save({
             'epoch': e,
             'model_state_dict': model.state_dict(),
@@ -280,12 +303,14 @@ if __name__ == "__main__":
             'loss': loss,
             }, filename)
 
-    checkpoint = torch.load("model_checkpoints/peptide_model_multiclass_epoch_9.pt")
+    checkpoint = torch.load("model_checkpoints/peptide_model_binary_epoch_9.pt")
     model.load_state_dict(checkpoint['model_state_dict'])
-
+    model.to("cpu")
+ 
     # hold out test set
     true_vals_test = []
     pred_vals_test = []
+
     for i in range(0, len(test_data), args.batch_size):
         prot_X_batch = prot_coords_test[i : i + args.batch_size]
         peptide_X_batch = peptide_coords_test[i : i + args.batch_size]
@@ -293,13 +318,27 @@ if __name__ == "__main__":
         peptide_seq_batch = peptide_seqs_test[i : i+args.batch_size]
         y_batch = y_test[i : i + args.batch_size]
 
-        loss, y_hat, y_batch = model(prot_X_batch, peptide_X_batch, prot_seq_batch, peptide_seq_batch, y_batch, max_prot_coords, max_peptide_coords)
-        y_hat = torch.argmax(y_hat, dim=1)
+        loss, y_hat, y_batch, mask = model(prot_X_batch, peptide_X_batch, prot_seq_batch, peptide_seq_batch, y_batch, max_prot_coords, max_peptide_coords)
+        y_hat = torch.sigmoid(y_hat)
+        # y_hat = torch.argmax(y_hat, dim=1)
 
-        print(f1_score(y_batch.cpu().detach().numpy(),y_hat.cpu().detach().numpy(), average='macro'))
+        square = (max_prot_coords, max_peptide_coords)
+        protein_mask = np.invert(np.all((mask.T.squeeze().reshape(square) == 0).cpu().detach().numpy(), axis=1)) # if all zero, set to False (protein residue nonexistent)
 
-        true_vals_test.extend(y_batch.cpu().detach().numpy().tolist())
-        pred_vals_test.extend(y_hat.cpu().detach().numpy().tolist())
+        masked_y_hat = np.ma.masked_where(~mask.T.squeeze().reshape(square).cpu().detach().numpy().astype(bool), 
+                                            y_hat.reshape(square).cpu().detach().numpy())
+        y_hat = masked_y_hat.mean(axis=1) # for y_hat, just take average probability value
+        y_hat = y_hat[y_hat.mask == False]
+
+        y_batch = np.any((y_batch.reshape(square) == 1.).cpu().detach().numpy(), axis=1).astype(int)
+        y_batch = y_batch[protein_mask]
+
+        print(y_hat.shape)
+        print(y_batch.shape)    
+        print(roc_auc_score(y_batch,y_hat))
+
+        true_vals_test.extend(y_batch.tolist())
+        pred_vals_test.extend(y_hat.tolist())
 
     scores_df = pd.DataFrame({'label':true_vals_test,'score':pred_vals_test})
     model.blm.add_model('val', scores_df)

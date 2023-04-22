@@ -6,6 +6,7 @@ import random
 from sklearn.metrics import r2_score
 from sklearn.metrics import roc_auc_score
 from sklearn.metrics import f1_score
+from sklearn.metrics import mean_squared_error
 from sru import SRUpp
 import sys
 import torch
@@ -17,10 +18,10 @@ import torch.optim.lr_scheduler as lr_scheduler
 sys.path.append("/home/dnori/rnadock/data")
 from data import ProteinStructureDataset
 
-class PairwiseDistanceModel(nn.Module):
+class RNAClassificationModel(nn.Module):
 
     def __init__(self, args):
-        super(PairwiseDistanceModel, self).__init__()
+        super(RNAClassificationModel, self).__init__()
         self.protein_encoder = FAEncoder(args, "protein")
         self.rna_encoder = FAEncoder(args, "rna")
         self.linear_layers = nn.Sequential(
@@ -36,54 +37,58 @@ class PairwiseDistanceModel(nn.Module):
         self.batch_converter = self.esm_alphabet.get_batch_converter()
         self.esm_model.eval()
 
-    def forward(self, prot_X_batch, peptide_X_batch, prot_seq_batch, peptide_seq_batch, y_batch, max_prot_coords, max_peptide_coords, loss_positive_weight):
+    def forward(self, prot_X_batch, rna_X_batch, prot_seq_batch, rna_seq_batch, y_batch, max_prot_coords, max_rna_coords):
 
         # prot_X: (batch sz, max prot seq len, 3)
         # rna_X: (batch sz, max rna seq len, 3)
         # seqs: batch sz-len list
         # label: (batch sz, max prot seq len, max rna seq len)
-        # max_prot_seq_len: max length of protein sequence
-        # max_rna_seq_len: max length of rna sequence
+        # max_prot_coords: max length of protein sequence
+        # max_rna_coords: max length of rna sequence
 
         esm_input = []
-        pad_mask = torch.from_numpy(np.ones((prot_X.shape[0],max_prot_seq_len)))
-        for s in range(len(seqs)):
-            sequence = seqs[s] + "<pad>"*(max_prot_seq_len - len(seqs[s]))
-            pad_mask[s,len(seqs[s]):] = 0
+        pad_mask = torch.from_numpy(np.ones((prot_X_batch.shape[0],max_prot_coords)))
+        for s in range(len(prot_seq_batch)):
+            sequence = prot_seq_batch[s] + "<pad>"*(max_prot_coords - len(prot_seq_batch[s]))
+            pad_mask[s,len(prot_seq_batch[s]):] = 0
             esm_input.append((f"protein_{s}",sequence))
         batch_labels, batch_strs, batch_tokens = self.batch_converter(esm_input)
 
-        rna_pad_mask = torch.from_numpy(np.ones((rna_X.shape[0],max_rna_seq_len)))
-        for s in range(len(rna_seqs)):
-            rna_pad_mask[s,len(rna_seqs[s]):] = 0
+        rna_pad_mask = torch.from_numpy(np.ones((rna_X_batch.shape[0],max_rna_coords)))
+        for s in range(len(rna_seq_batch)):
+            rna_pad_mask[s,len(rna_seq_batch[s]):] = 0
 
         # per residue representation
         with torch.no_grad():
             self.esm_model.to(torch.float16).cuda()
 
-            token_repr = torch.from_numpy(np.zeros((batch_tokens.shape[0],max_prot_seq_len,1280)))
+            token_repr = torch.from_numpy(np.zeros((batch_tokens.shape[0],max_prot_coords,1280)))
             for i in range(len(batch_tokens)):
                 results = self.esm_model(batch_tokens[i:i+1,:].cuda(), repr_layers=[33], return_contacts=True)
                 token_repr[i,:,:] = results["representations"][33][:,1:-1,:]
 
-        h_prot = self.protein_encoder(prot_X.cuda(), h_S=token_repr, mask=pad_mask.cuda()) # h_prot: (batch sz, max prot seq len, encoder hidden dim)
-        h_rna = self.rna_encoder(rna_X.cuda(), mask=rna_pad_mask.cuda()) #h_rna: (batch sz, max rna seq len, encoder hidden dim)
+        h_prot = self.protein_encoder(prot_X_batch.cuda(), h_S=token_repr, mask=pad_mask.cuda()) # h_prot: (batch sz, max prot seq len, encoder hidden dim)
+        h_rna = self.rna_encoder(rna_X_batch.cuda(), mask=rna_pad_mask.cuda()) #h_rna: (batch sz, max rna seq len, encoder hidden dim)
 
-        # flatten the encoded sequences and concatenate them
-        h_prot = h_prot.reshape(h_prot.shape[0], h_prot.shape[1], 1, h_prot.shape[2]).detach().cpu()  # shape: (batch_sz, max_prot_seq_len, 1, encoder_hidden_dim)
-        h_rna = h_rna.reshape(h_rna.shape[0], 1, h_rna.shape[1], h_rna.shape[2]).detach().cpu()  # shape: (batch_sz, 1, max_rna_seq_len, encoder_hidden_dim)
-        h = torch.from_numpy(np.concatenate((h_prot.repeat(h_rna.shape[2], axis=2), h_rna.repeat(h_prot.shape[1], axis=1)), axis=-1)).cuda().view(1, -1, 2*args.encoder_hidden_size)  # shape: (batch_sz, max_prot_seq_len * max_rna_seq_len, 2*encoder_hidden_dim)
-        print(torch.max(h))
-        print(torch.min(h))
+        # Repeat and tile h_prot and h_pep to create tensors of shape (batch_size, max_prot_seq_len, max_peptide_seq_len, encoder_hidden_dim)
+        h_prot_tiled = h_prot.unsqueeze(2).repeat(1, 1, max_rna_coords, 1)
+        h_rna_tiled = h_rna.unsqueeze(1).repeat(1, max_prot_coords, 1, 1)
 
-        label = label.view(1, -1)
+        # Concatenate h_prot_tiled and h_pep_tiled along the last dimension to create a tensor of shape (batch_size, max_prot_seq_len, max_peptide_seq_len, 2*encoder_hidden_dim)
+        h_concat = torch.cat([h_prot_tiled, h_rna_tiled], dim=-1)
+
+        # Reshape h_concat to create the final tensor of shape (batch_size, max_prot_seq_len * max_peptide_seq_len, 2*encoder_hidden_dim)
+        h = h_concat.view(len(h_prot), max_prot_coords * max_rna_coords, 2*args.encoder_hidden_size)
+
+        label = torch.from_numpy(y_batch).view(-1)
         mask = torch.unsqueeze(torch.mm(pad_mask.T, rna_pad_mask).flatten(), dim=0)
         
         # h = torch.cat((h,token_repr.cuda()),dim=-1)
-        pred = self.linear_layers(h.float()).squeeze(-1)
-        loss = F.binary_cross_entropy_with_logits(pred, label.cuda(), reduction = 'none')
+        pred = self.linear_layers(h.float()).squeeze()
+        #loss = F.binary_cross_entropy_with_logits(pred, label.cuda(), reduction = 'none')
+        loss = F.cross_entropy(pred, label.cuda().type(torch.int64), reduction = 'none') #does softmax under hood
         loss = (loss * mask.cuda()).sum() / mask.sum() #masking out padded residues
-        return loss, pred, label
+        return loss, pred, label, mask
 
 class FrameAveraging(nn.Module):
 
@@ -162,7 +167,7 @@ if __name__ == "__main__":
     parser.add_argument('--encoder_hidden_size', type=int, default=200)
     parser.add_argument('--mlp_hidden_size', type=int, default=200)
     parser.add_argument('--depth', type=int, default=2)
-    parser.add_argument('--mlp_output_dim', type=int, default=1)
+    parser.add_argument('--mlp_output_dim', type=int, default=20)
     parser.add_argument('--dropout', type=float, default=0.1)
     parser.add_argument('--lr', type=float, default=1e-3)
     parser.add_argument('--epochs', type=int, default=10)
@@ -178,13 +183,13 @@ if __name__ == "__main__":
     dataset = ProteinStructureDataset("dataset.pickle")
     train_data = dataset.train_data
     test_data = dataset.test_data
+    # cut off data for now
+    train_data = train_data[:200]
+    test_data = test_data[:100]
     print('Train/test data:', len(train_data), len(test_data))
-
-    train_data = train_data[:10]
-    test_data = test_data[:10]
     
     max_prot_coords = max([len(entry['target_coords']) for entry in train_data+test_data])
-    max_rna_coords = max([len(entry['rna_coords']) for entry in train_data+test_data])
+    max_rna_coords = max([len(entry['ligand_coords']) for entry in train_data+test_data])
     print('Max protein len:', max_prot_coords)
     print('Max RNA len:', max_rna_coords)
 
@@ -194,16 +199,22 @@ if __name__ == "__main__":
     prot_coords_train, rna_coords_train, y_train, prot_seqs_train, rna_seqs_train = ProteinStructureDataset.prep_dists_for_training(train_data, max_prot_coords, max_rna_coords)
     prot_coords_test, rna_coords_test, y_test, prot_seqs_test, rna_seqs_test = ProteinStructureDataset.prep_dists_for_training(test_data, max_prot_coords, max_rna_coords)
 
-    model = PairwiseDistanceModel(args)
+    # cast to 20-class problem
+    y_train = np.floor(y_train)
+    y_train = np.where(y_train >= 19, 19., 0.)
+    y_test = np.floor(y_test)
+    y_test = np.where(y_test >= 19, 19., 0.)
+
+    model = RNAClassificationModel(args)
     optimizer = torch.optim.Adam(model.parameters(), lr=args.lr)
     scheduler = lr_scheduler.ExponentialLR(optimizer, args.anneal_rate)
 
-    r2_dict = {}
+    mse_dict = {}
 
     for e in range(args.epochs):
         model.train()
         random.shuffle(train_data)
-        train_r2 = []
+        train_mse = []
         for i in range(0, len(train_data), args.batch_size):
             print(f'batch_{i}_epoch_{e}')
             optimizer.zero_grad()
@@ -220,44 +231,66 @@ if __name__ == "__main__":
                 rna_seq_batch = rna_seqs_train[i :]
                 y_batch = y_train[i :]
 
-            loss, y_hat, y_batch = model(prot_X_batch, rna_X_batch, prot_seq_batch, rna_seq_batch, y_batch, max_prot_coords, max_rna_coords)
-            y_batch = y_batch.reshape((y_batch.shape[0]*y_batch.shape[1],))
-            y_hat = y_hat.reshape((y_hat.shape[0]*y_hat.shape[1],))
+            loss, y_hat, y_batch, mask = model(prot_X_batch, rna_X_batch, prot_seq_batch, rna_seq_batch, y_batch, max_prot_coords, max_rna_coords)
+            y_hat = F.softmax(y_hat, dim=1)
+            y_hat = np.sum(y_hat.cpu().detach().numpy() * np.arange(20), axis=1) #weighted average
 
-            r2 = r2_score(y_batch.cpu().detach().numpy(),y_hat.cpu().detach().numpy())
-            print(f"Train R^2: {r2}")
-            train_r2.append(r2)
+            # mask padded residues
+            square = (max_prot_coords, max_rna_coords)
+            protein_mask = np.invert(np.all((mask.T.squeeze().reshape(square) == 0).cpu().detach().numpy(), axis=1)) # if all zero, set to False (protein residue nonexistent)
+
+            masked_y_hat = np.ma.masked_where(~mask.T.squeeze().reshape(square).cpu().detach().numpy().astype(bool), 
+                                                y_hat.reshape(square))
+            y_hat = masked_y_hat.mean(axis=1)
+            y_hat = np.round(y_hat[y_hat.mask == False])
+
+            y_batch = np.any((y_batch.reshape(square) == 1.).cpu().detach().numpy(), axis=1).astype(int)
+            y_batch = y_batch[protein_mask]
+
+            # y_batch = y_batch.reshape((y_batch.shape[0]*y_batch.shape[1],))
+            # y_hat = y_hat.reshape((y_hat.shape[0]*y_hat.shape[1],))
+
+            mse = f1_score(y_batch,y_hat,average="weighted")
+            print(f"Train F1: {mse}")
+            train_mse.append(mse)
 
             nn.utils.clip_grad_norm_(model.parameters(), args.clip_norm)
             optimizer.step()
 
-        r2_dict[f"Train epoch {e}"] = sum(train_r2) / len(train_r2)
+        mse_dict[f"Train epoch {e}"] = sum(train_mse) / len(train_mse)
 
-    # hold out test set
-    test_r2 = []
-    for i in range(0, len(test_data), args.batch_size):
-        prot_X_batch = prot_coords_test[i : i + args.batch_size]
-        rna_X_batch = rna_coords_test[i : i + args.batch_size]
-        prot_seq_batch = prot_seqs_test[i : i+args.batch_size]
-        rna_seq_batch = rna_seqs_test[i : i+args.batch_size]
-        y_batch = y_test[i : i + args.batch_size]
+        filename = f'model_checkpoints/rna_dist_20class_epoch_{e}.pt'
+        torch.save({
+            'epoch': e,
+            'model_state_dict': model.state_dict(),
+            'optimizer_state_dict': optimizer.state_dict(),
+            'loss': loss,
+            }, filename)
 
-        loss, y_hat, y_batch = model(prot_X_batch, rna_X_batch, prot_seq_batch, rna_seq_batch, y_batch, max_prot_coords, max_rna_coords)
 
-        y_batch = y_batch.reshape((y_batch.shape[0]*y_batch.shape[1],))
-        y_hat = y_hat.reshape((y_hat.shape[0]*y_hat.shape[1],))
+    # # hold out test set
+    # test_mse = []
+    # for i in range(0, len(test_data), args.batch_size):
+    #     prot_X_batch = prot_coords_test[i : i + args.batch_size]
+    #     rna_X_batch = rna_coords_test[i : i + args.batch_size]
+    #     prot_seq_batch = prot_seqs_test[i : i+args.batch_size]
+    #     rna_seq_batch = rna_seqs_test[i : i+args.batch_size]
+    #     y_batch = y_test[i : i + args.batch_size]
 
-        r2 = r2_score(y_batch.cpu().detach().numpy(),y_hat.cpu().detach().numpy())
-        print(f"Test R^2: {r2}")
-        test_r2.append(r2)
+    #     loss, y_hat, y_batch, mask = model(prot_X_batch, rna_X_batch, prot_seq_batch, rna_seq_batch, y_batch, max_prot_coords, max_rna_coords)
 
-    r2_dict["Test"] = sum(test_r2) / len(test_r2)
-    print(r2_dict)
+    #     y_batch = y_batch.reshape((y_batch.shape[0]*y_batch.shape[1],))
+    #     y_hat = y_hat.reshape((y_hat.shape[0]*y_hat.shape[1],))
+
+    #     mse = mean_squared_error(y_batch.cpu().detach().numpy(),y_hat.cpu().detach().numpy())
+    #     print(f"Test MSE: {mse}")
+    #     test_mse.append(mse)
+
+    # r2_dict["Test"] = sum(test_r2) / len(test_r2)
+    # print(r2_dict)
 
     # r2_df = pd.DataFrame(r2_dict)
     # r2_df.to_csv('charts/r2_metric.csv', index=False, header=True)
 
     # change to multiclass (cap at 20 angstroms, 20-class) - take expected value over the predicted probability distribution (weighted average over softmax of logits)
     # can use mse instead of r2
-
-    # don't convert tensor to numpy in training (autograd doesn't work, treats as constant array); can have tensor on cpu

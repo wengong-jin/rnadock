@@ -68,7 +68,7 @@ def create_datapoint(filepath):
     print(len(rna_seq))
     name = filepath[9:-4]
 
-    if len(target_coords) > 1500 or len(rna_coords) > 1000:
+    if len(target_coords) > 1200 or len(rna_coords) > 1000:
         raise Exception(f"{filepath} had >1500 residues or >1000 nucleotides")
 
     # compute binary mask
@@ -146,7 +146,7 @@ def create_peptide_datapoint(filepath):
         return None
     
 if __name__ == "__main__":
-    pdb_out_dir = "data/complex"
+    pdb_out_dir = "data/pdb"
     data_csv = "data/select.csv"
 
     # load_and_filter(data_csv, pdb_out_dir)
@@ -162,7 +162,7 @@ if __name__ == "__main__":
         # returns entry dict with keys target_coords,
         # rna_seq, binary_mask
         try:
-            entry, name, seq = create_peptide_datapoint(filepath)
+            entry, name, seq = create_datapoint(filepath)
             if entry:
                 dataset[name] = entry
                 list_seq.append(seq)
@@ -174,12 +174,12 @@ if __name__ == "__main__":
             print(f"Error on {filepath}.")
             print(e)
 
-    ofile = open("data/fasta_peptide.txt", "w")
+    ofile = open("data/fasta.txt", "w")
     for i in range(len(list_seq)):
         ofile.write(">" + list_name[i] + "\n" +list_seq[i] + "\n")
     ofile.close()
 
-    os.system("mmseqs easy-cluster data/fasta_peptide.txt clusterRes tmp --min-seq-id 0.5 --cov-mode 1")
+    os.system("mmseqs easy-cluster data/fasta.txt clusterRes tmp --min-seq-id 0.5 --cov-mode 1")
 
     with open("clusterRes_all_seqs.fasta") as f:
         lines = f.readlines()
@@ -196,7 +196,7 @@ if __name__ == "__main__":
                 pass
     
     #peptide dataset
-    with open('dataset_peptide.pickle', 'wb') as handle:
+    with open('dataset.pickle', 'wb') as handle:
         pickle.dump(list(dataset.values()), handle)
 
 

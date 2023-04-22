@@ -133,10 +133,10 @@ class BinaryLabelMetrics:
         self._confmat.append(df)
 
         # ROC curve - area
-        # auc = roc_auc_score(
-        #     labels, scores, average=params.get("skl_auc_average", "micro"), 
-        # )
-        # self._auc.append(auc)
+        auc = roc_auc_score(
+            labels, scores, average=params.get("skl_auc_average", "micro"), 
+        )
+        self._auc.append(auc)
 
         self._f1.append(f1)
 

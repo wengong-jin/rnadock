@@ -3,8 +3,6 @@ General script which takes the following options:
 - dataset: RNA or ligand
 - ligand_structure: True or False
 - binary or 20-class
-
-original script: binary, ligand, with ligand
 """
 
 import argparse
@@ -31,6 +29,19 @@ from binary_label_metrics import BinaryLabelMetrics
 sys.path.append("/home/dnori/rnadock/data")
 from data import ProteinStructureDataset
 
+#### metrics helper functions for multiclass
+
+def ovr(label, pred, names):
+  bcm = BinaryLabelMetrics(); auc = list()
+  print(pred.shape)
+  print(label.shape)
+  for n,name in enumerate(names):
+    df = pd.DataFrame({"label":np.where(label==n,1,0),"score":pred[:,n]})
+    if sum(df["label"].tolist()) > 0:
+        bcm.add_model(name, df)
+        auc.append(roc_auc_score(df["label"],df["score"]))
+  return bcm
+
 class ClassificationModel(nn.Module):
 
     def __init__(self, args):
@@ -54,7 +65,7 @@ class ClassificationModel(nn.Module):
         self.batch_converter = self.esm_alphabet.get_batch_converter()
         self.esm_model.eval()
 
-    def forward(self, prot_X, ligand_X, seqs, ligand_seqs, label, max_prot_seq_len, max_ligand_seq_len):
+    def forward(self, prot_X, ligand_X, seqs, ligand_seqs, y_batch, max_prot_seq_len, max_ligand_seq_len):
         esm_input = []
         pad_mask = torch.from_numpy(np.ones((prot_X.shape[0],max_prot_seq_len)))
         for s in range(len(seqs)):
@@ -63,7 +74,7 @@ class ClassificationModel(nn.Module):
             esm_input.append((f"protein_{s}",sequence))
         batch_labels, batch_strs, batch_tokens = self.batch_converter(esm_input)
 
-        if args.ligand_structure and args.ligand_type=="peptide":
+        if args.ligand_type=="peptide":
             esm_input_ligand = []
             pad_mask_ligand = torch.from_numpy(np.ones((ligand_X.shape[0],max_ligand_seq_len)))
             for s in range(len(ligand_seqs)):
@@ -72,7 +83,7 @@ class ClassificationModel(nn.Module):
                 esm_input_ligand.append((f"ligand_{s}",sequence))
             batch_labels_ligand, batch_strs_ligand, batch_tokens_ligand = self.batch_converter(esm_input_ligand)
 
-        elif args.ligand_structure and args.ligand_type=="rna":
+        elif args.ligand_type=="rna":
             pad_mask_ligand = torch.from_numpy(np.ones((ligand_X.shape[0],max_ligand_seq_len)))
             for s in range(len(ligand_seqs)):
                 pad_mask_ligand[s,len(ligand_seqs[s]):] = 0
@@ -86,7 +97,7 @@ class ClassificationModel(nn.Module):
                 results = self.esm_model(batch_tokens[i:i+1,:].cuda(), repr_layers=[33], return_contacts=True) #.cuda()
                 token_repr[i,:,:] = results["representations"][33][:,1:-1,:]
 
-            if args.ligand_structure and args.ligand_type=="peptide": 
+            if args.ligand_type=="peptide": 
                 token_repr_ligand = torch.from_numpy(np.zeros((batch_tokens_ligand.shape[0],max_ligand_seq_len,1280)))
                 for i in range(len(batch_tokens_ligand)):
                     results_ligand = self.esm_model(batch_tokens_ligand[i:i+1,:].cuda(), repr_layers=[33], return_contacts=True) #.cuda()
@@ -94,6 +105,7 @@ class ClassificationModel(nn.Module):
 
         self.protein_encoder.cuda()
         h_prot = self.protein_encoder(prot_X.cuda(), h_S=token_repr, mask=pad_mask.cuda()) # h_prot: (batch sz, max prot seq len, encoder hidden dim)
+        full_mask = torch.unsqueeze(torch.mm(pad_mask.T, pad_mask_ligand).flatten(), dim=0)
 
         if args.ligand_structure:
             self.ligand_encoder.cuda()
@@ -111,15 +123,28 @@ class ClassificationModel(nn.Module):
 
             # Reshape h_concat to create the final tensor of shape (batch_size, max_prot_seq_len * max_ligand_seq_len, 2*encoder_hidden_dim)
             h = h_concat.view(len(h_prot), max_prot_seq_len * max_ligand_seq_len, 2*args.encoder_hidden_size)
+            mask = full_mask
 
-            label = torch.from_numpy(y_batch).view(-1)
-            mask = torch.unsqueeze(torch.mm(pad_mask.T, pad_mask_ligand).flatten(), dim=0)
-
+            if args.classification_type == "binary":
+                label = torch.from_numpy(y_batch.squeeze().flatten())
+            elif args.classification_type == "multiclass":
+                y_batch = y_batch.squeeze().flatten()
+                label = torch.from_numpy(y_batch)
         else:
             h = h_prot
             mask = pad_mask.T.squeeze()
-            label = torch.any((torch.from_numpy(y_batch.squeeze()) == 1.), dim=1).long().float()
-
+            
+            if args.classification_type == "binary":
+                label = torch.any((torch.from_numpy(y_batch).squeeze() == 1.), dim=1).long().float()
+            elif args.classification_type == "multiclass":
+                y_batch = y_batch.squeeze()
+                square_mask = full_mask.reshape((max_prot_seq_len, max_ligand_seq_len))
+                square_mask = np.where(square_mask == 0, True, False) #masked positions are True
+                y_batch[square_mask] = 10000 # masked positions are 10000 (not min)
+                label = y_batch.min(axis=1)
+                label[np.where(np.all(y_batch == 10000, axis=1))] = 0
+                label = torch.from_numpy(label)
+        
         self.linear_layers.cuda()
         pred = self.linear_layers(h.float()).squeeze()
         if args.classification_type == "binary":
@@ -215,7 +240,7 @@ if __name__ == "__main__":
     parser.add_argument('--encoder_hidden_size', type=int, default=200)
     parser.add_argument('--mlp_hidden_size', type=int, default=200)
     parser.add_argument('--depth', type=int, default=2)
-    parser.add_argument('--mlp_output_dim', type=int, default=20)
+    parser.add_argument('--mlp_output_dim', type=int, default=21)
     parser.add_argument('--dropout', type=float, default=0.1)
     parser.add_argument('--lr', type=float, default=1e-3)
     parser.add_argument('--epochs', type=int, default=10)
@@ -224,12 +249,17 @@ if __name__ == "__main__":
     parser.add_argument('--batch_size', type=int, default=1)
     parser.add_argument('--clip_norm', type=float, default=1.0)
     parser.add_argument('--device', type=str, default='cuda:0')
-    parser.add_argument('--ligand_structure', type=bool, default=False)
-    parser.add_argument('--ligand_type',type=str,default='rna')
+    parser.add_argument('--ligand_structure', type=bool, default=True)
+    parser.add_argument('--ligand_type',type=str,default='peptide')
     parser.add_argument('--classification_type',type=str,default='multiclass')
     args = parser.parse_args()
 
     torch.manual_seed(args.seed)
+
+    if args.classification_type == "multiclass" and args.mlp_output_dim < 2:
+        raise ValueError("for multiclass, output dimension must be > 1")
+    elif args.classification_type == "binary" and args.mlp_output_dim >= 2:
+        raise ValueError("for binary, output dimension must be 1")
 
     dataset = ProteinStructureDataset(f"dataset_{args.ligand_type}.pickle")
     train_data = dataset.train_data
@@ -251,10 +281,11 @@ if __name__ == "__main__":
     prot_coords_test, ligand_coords_test, y_test, prot_seqs_test, ligand_seqs_test = ProteinStructureDataset.prep_dists_for_training(test_data, max_prot_coords, max_ligand_coords)
 
     if args.classification_type == "multiclass":
+        # 0-19 = set of distances in the unit above label, 20 = >=20 angstroms
         y_train = np.floor(y_train)
-        y_train = np.where(y_train >= args.mlp_output_dim - 1, float(args.mlp_output_dim - 1), 0.)
-        y_test = np.floor(y_test)
-        y_test = np.where(y_test >= args.mlp_output_dim - 1, float(args.mlp_output_dim - 1), 0.)
+        y_train = np.where(y_train >= args.mlp_output_dim - 1, float(args.mlp_output_dim - 1), y_train)
+        y_test = np.ceil(y_test)
+        y_test = np.where(y_test >= args.mlp_output_dim - 1, float(args.mlp_output_dim - 1), y_test)
     elif args.classification_type == "binary":
         # cast to binary problem, exclude padded residues
         y_train = np.where((y_train < 10) & (y_train != 0), 1., 0.)
@@ -265,7 +296,7 @@ if __name__ == "__main__":
     model = ClassificationModel(args)
     optimizer = torch.optim.Adam(model.parameters(), lr=args.lr)
     scheduler = lr_scheduler.ExponentialLR(optimizer, args.anneal_rate)
-
+    
     for e in range(args.epochs):
         model.train()
         random.shuffle(train_data)
@@ -292,8 +323,8 @@ if __name__ == "__main__":
             if args.classification_type == "binary":
                 y_hat = torch.sigmoid(y_hat)
             elif args.classification_type == "multiclass":
-                y_hat = F.softmax(y_hat, dim=1)
-                y_hat = torch.sum(y_hat.cpu() * torch.arange(20), dim=1) #weighted average
+                y_hat_mm = F.softmax(y_hat, dim=1)
+                y_hat = torch.sum(y_hat_mm.cpu() * torch.arange(args.mlp_output_dim), dim=1) #weighted average
 
             if args.ligand_structure:
                 square = (max_prot_coords, max_ligand_coords)
@@ -304,31 +335,62 @@ if __name__ == "__main__":
                 y_hat = masked_y_hat.mean(axis=1) # for y_hat, just take average probability value
                 y_hat = y_hat[y_hat.mask == False]
 
-                y_batch = np.any((y_batch.reshape(square) == 1.).cpu().detach().numpy(), axis=1).astype(int)
-                y_batch = y_batch[protein_mask]
+                if args.classification_type == "multiclass":
+                    masked_y_batch = np.ma.masked_where(~mask.T.squeeze().reshape(square).cpu().detach().numpy().astype(bool), 
+                                                    y_batch.reshape(square).cpu().detach().numpy())
+                    y_batch = masked_y_batch.min(axis=1)
+                    y_batch = y_batch[y_batch.mask == False].T.squeeze()
+                    y_hat = np.round(y_hat).T.squeeze()
+                    
+                    expanded_mask = np.repeat(np.expand_dims(~mask.T.squeeze().
+                                    reshape(square).cpu().detach().numpy().astype(bool), 
+                                    axis=2), args.mlp_output_dim, axis=2)
+                    y_hat_mm = np.ma.masked_where(expanded_mask, 
+                                    y_hat_mm.reshape((square[0],square[1],
+                                    args.mlp_output_dim)).cpu().detach().numpy())
+                    y_hat_mm = y_hat_mm.mean(axis=1)
+                    y_hat_mm = y_hat_mm[protein_mask]
+
+                elif args.classification_type == "binary":
+                    y_batch = np.any((y_batch.reshape(square) == 1.).cpu().detach().numpy(), axis=1).astype(int)
+                    y_batch = y_batch[protein_mask]
+
             else:
                 y_batch = y_batch[mask.bool()].cpu().detach().numpy()
-                y_hat = np.round(y_hat[mask.bool()].cpu().detach().numpy())
+                if args.classification_type == "multiclass":
+                    y_hat = np.round(y_hat[mask.bool()].cpu().detach().numpy())
+                    y_hat_mm = y_hat_mm[mask.bool()].cpu().detach().numpy()
+                elif args.classification_type == "binary":
+                    y_hat = y_hat[mask.bool()].cpu().detach().numpy()
 
             if args.classification_type == "binary":
-                print(roc_auc_score(y_batch,y_hat))
+                true_vals.extend(y_batch.tolist())
+                pred_vals.extend(y_hat.tolist())
+                try:
+                    print(roc_auc_score(y_batch,y_hat))
+                except:
+                    print('one class present')
             else:
-                print(y_batch[:10])
-                print(y_hat[:10])
-                print(f1_score(y_batch,y_hat))
+                true_vals.extend(y_batch.tolist())
+                pred_vals.append(y_hat_mm)
+                print(f1_score(y_batch,y_hat, average='weighted'))
 
-            true_vals.extend(y_batch.tolist())
-            pred_vals.extend(y_hat.tolist())
-            
             loss.backward()
             nn.utils.clip_grad_norm_(model.parameters(), args.clip_norm)
             optimizer.step()
 
-        scores_df = pd.DataFrame({'label':true_vals,'score':pred_vals})
-        model.blm.add_model(f'epoch_{e}', scores_df)
-        model.blm.plot_roc(model_names=[f'epoch_{e}'],params={"save":True,"prefix":f"charts/epoch_{e}_"})
+        if args.classification_type == "binary":
+            scores_df = pd.DataFrame({'label':true_vals,'score':pred_vals})
+            model.blm.add_model(f'epoch_{e}', scores_df)
+            model.blm.plot_roc(model_names=[f'epoch_{e}'],params={"save":True,"prefix":f"charts/epoch_{e}_"})
+        else:
+            names = [f"{i} Angstroms" for i in range(args.mlp_output_dim)]
+            true_vals = np.array(true_vals)
+            pred_vals = np.concatenate(pred_vals, axis=0)
+            blm = ovr(true_vals, pred_vals, names)
+            blm.plot_roc(chart_types=[1,2], params={"legloc":4, "addsz":False, "save":True, "prefix":f"charts/epoch_{e}_"})
 
-        filename = f'model_checkpoints/rna_binary_wligand_epoch_{e}.pt'
+        filename = f'model_checkpoints/peptide_multiclass_wligand_epoch_{e}.pt'
         torch.save({
             'epoch': e,
             'model_state_dict': model.state_dict(),
@@ -336,7 +398,7 @@ if __name__ == "__main__":
             'loss': loss,
             }, filename)
 
-    checkpoint = torch.load("model_checkpoints/rna_binary_wligand_epoch_9.pt")
+    checkpoint = torch.load("model_checkpoints/peptide_multiclass_wligand_epoch_9.pt")
     model.load_state_dict(checkpoint['model_state_dict'])
     model.to("cpu")
  
@@ -352,8 +414,11 @@ if __name__ == "__main__":
         y_batch = y_test[i : i + args.batch_size]
 
         loss, y_hat, y_batch, mask = model(prot_X_batch, ligand_X_batch, prot_seq_batch, ligand_seq_batch, y_batch, max_prot_coords, max_ligand_coords)
-        y_hat = torch.sigmoid(y_hat)
-        # y_hat = torch.argmax(y_hat, dim=1)
+        if args.classification_type == "binary":
+            y_hat = torch.sigmoid(y_hat)
+        elif args.classification_type == "multiclass":
+            y_hat_mm = F.softmax(y_hat, dim=1)
+            y_hat = torch.sum(y_hat_mm.cpu() * torch.arange(args.mlp_output_dim), dim=1) #weighted average
 
         if args.ligand_structure:
             square = (max_prot_coords, max_ligand_coords)
@@ -364,19 +429,52 @@ if __name__ == "__main__":
             y_hat = masked_y_hat.mean(axis=1) # for y_hat, just take average probability value
             y_hat = y_hat[y_hat.mask == False]
 
-            y_batch = np.any((y_batch.reshape(square) == 1.).cpu().detach().numpy(), axis=1).astype(int)
-            y_batch = y_batch[protein_mask]
+            if args.classification_type == "multiclass":
+                masked_y_batch = np.ma.masked_where(~mask.T.squeeze().reshape(square).cpu().detach().numpy().astype(bool), 
+                                                y_batch.reshape(square).cpu().detach().numpy())
+                y_batch = masked_y_batch.min(axis=1)
+                y_batch = y_batch[y_batch.mask == False].T.squeeze()
+                y_hat = np.round(y_hat).T.squeeze()
+                
+                expanded_mask = np.repeat(np.expand_dims(~mask.T.squeeze().
+                                reshape(square).cpu().detach().numpy().astype(bool), 
+                                axis=2), args.mlp_output_dim, axis=2)
+                y_hat_mm = np.ma.masked_where(expanded_mask, 
+                                y_hat_mm.reshape((square[0],square[1],
+                                args.mlp_output_dim)).cpu().detach().numpy())
+                y_hat_mm = y_hat_mm.mean(axis=1)
+                y_hat_mm = y_hat_mm[protein_mask]
+
+            elif args.classification_type == "binary":
+                y_batch = np.any((y_batch.reshape(square) == 1.).cpu().detach().numpy(), axis=1).astype(int)
+                y_batch = y_batch[protein_mask]
         else:
             y_batch = y_batch[mask.bool()].cpu().detach().numpy()
-            y_hat = y_hat[mask.bool()].cpu().detach().numpy()
+            if args.classification_type == "multiclass":
+                y_hat = np.round(y_hat[mask.bool()].cpu().detach().numpy())
+                y_hat_mm = y_hat_mm[mask.bool()].cpu().detach().numpy()
+            elif args.classification_type == "binary":
+                y_hat = y_hat[mask.bool()].cpu().detach().numpy()
 
-        print(y_hat.shape)
-        print(y_batch.shape)
-        print(roc_auc_score(y_batch,y_hat))
+        if args.classification_type == "binary":
+            true_vals_test.extend(y_batch.tolist())
+            pred_vals_test.extend(y_hat.tolist())
+            try:
+                print(roc_auc_score(y_batch,y_hat))
+            except:
+                print('one class present')
+        else:
+            true_vals_test.extend(y_batch.tolist())
+            pred_vals_test.append(y_hat_mm)
+            print(f1_score(y_batch,y_hat, average='weighted'))
 
-        true_vals_test.extend(y_batch.tolist())
-        pred_vals_test.extend(y_hat.tolist())
-
-    scores_df = pd.DataFrame({'label':true_vals_test,'score':pred_vals_test})
-    model.blm.add_model('val', scores_df)
-    model.blm.plot_roc(model_names=['val'],params={"save":True,"prefix":"charts/val_"})
+    if args.classification_type == "binary":
+        scores_df = pd.DataFrame({'label':true_vals_test,'score':pred_vals_test})
+        model.blm.add_model(f'val', scores_df)
+        model.blm.plot_roc(model_names=[f'epoch_{e}'],params={"save":True,"prefix":f"charts/val_"})
+    else:
+        names = [f"{i} Angstroms" for i in range(args.mlp_output_dim)]
+        true_vals_test = np.array(true_vals_test)
+        pred_vals_test = np.concatenate(pred_vals_test, axis=0)
+        blm = ovr(true_vals_test, pred_vals_test, names)
+        blm.plot_roc(chart_types=[1,2], params={"legloc":4, "addsz":False, "save":True, "prefix":f"charts/val_"})

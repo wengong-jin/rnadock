@@ -68,8 +68,8 @@ def create_datapoint(filepath):
     print(len(rna_seq))
     name = filepath[9:-4]
 
-    if len(target_coords) > 1200 or len(rna_coords) > 1000:
-        raise Exception(f"{filepath} had >1500 residues or >1000 nucleotides")
+    if len(target_coords) > 1000 or len(rna_coords) > 800:
+        raise Exception(f"{filepath} had >1200 residues or >800 nucleotides")
 
     # compute binary mask
     mask = [0 for i in range(len(target_coords))]
@@ -195,10 +195,5 @@ if __name__ == "__main__":
             else:
                 pass
     
-    #peptide dataset
-    with open('dataset.pickle', 'wb') as handle:
+    with open('dataset_rna.pickle', 'wb') as handle:
         pickle.dump(list(dataset.values()), handle)
-
-
-# first letter is peptide, second letter is receptor
-

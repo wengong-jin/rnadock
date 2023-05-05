@@ -71,5 +71,6 @@ class ProteinStructureDataset():
             y[i, :P, :R] = b['pairwise_dists'] # torch.nn.functional.normalize(b['pairwise_dists']) #normalize dists for each complex
             prot_seqs.append(b['target_seq'])
             rna_seqs.append(b['ligand_seq'])
+        
         return protein_X, rna_X, y, prot_seqs, rna_seqs
 

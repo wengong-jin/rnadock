@@ -144,9 +144,35 @@ def create_peptide_datapoint(filepath):
         return {'target_coords': target_coords, 'ligand_seq': peptide_seq, 'ligand_coords': peptide_coords, 'target_seq':target_seq, 'binary_mask': mask, 'cluster':'na', 'pairwise_dists': distances}, name, target_seq
     else:
         return None
+
+
+def create_non_rbp_datapoint(filepath):
+
+
+    pdb_file = pdb.PDBFile.read(filepath)
+    structure = pdb_file.get_structure()[0]
+
+
+    cid = list(set(structure.chain_id))[0]
+    chain = structure[structure.chain_id == cid]
+    target_seq = chain[chain.atom_name == 'CA'].res_name
+    target_coords = chain[chain.atom_name == 'CA'].coord
+    name = filepath[13:-4]
+
+    if len(target_coords) > 1000 or len(target_coords) < 100:
+        raise Exception(f"{filepath} had >1000 or <100 residues.")
+
+    # modify target sequence (remove nonstandard amino acids)
+    try:
+        target_seq = ''.join([protein_letters_3to1[three_letter_code] for three_letter_code 
+                                                in target_seq.tolist()])
+    except Exception as e:
+        return None
+    
+    return {'target_coords': target_coords, 'target_seq':target_seq, 'cluster':'na'}, name, target_seq
     
 if __name__ == "__main__":
-    pdb_out_dir = "data/pdb"
+    pdb_out_dir = "data/non_rbp"
     data_csv = "data/select.csv"
 
     # load_and_filter(data_csv, pdb_out_dir)
@@ -162,7 +188,7 @@ if __name__ == "__main__":
         # returns entry dict with keys target_coords,
         # rna_seq, binary_mask
         try:
-            entry, name, seq = create_datapoint(filepath)
+            entry, name, seq = create_non_rbp_datapoint(filepath)
             if entry:
                 dataset[name] = entry
                 list_seq.append(seq)
@@ -174,12 +200,12 @@ if __name__ == "__main__":
             print(f"Error on {filepath}.")
             print(e)
 
-    ofile = open("data/fasta.txt", "w")
+    ofile = open("data/fasta_non_rbp.txt", "w")
     for i in range(len(list_seq)):
         ofile.write(">" + list_name[i] + "\n" +list_seq[i] + "\n")
     ofile.close()
 
-    os.system("mmseqs easy-cluster data/fasta.txt clusterRes tmp --min-seq-id 0.5 --cov-mode 1")
+    os.system("mmseqs easy-cluster data/fasta_non_rbp.txt clusterRes tmp --min-seq-id 0.5 --cov-mode 1")
 
     with open("clusterRes_all_seqs.fasta") as f:
         lines = f.readlines()
@@ -195,5 +221,5 @@ if __name__ == "__main__":
             else:
                 pass
     
-    with open('dataset_rna.pickle', 'wb') as handle:
+    with open('dataset_non_rbp.pickle', 'wb') as handle:
         pickle.dump(list(dataset.values()), handle)

@@ -5,11 +5,15 @@ Understanding the mechanisms of RNA-protein binding is critical for the discover
 To run code:
 
 1. Create conda environment from rnadock.yml
-2. To retrain residue classification model run
+2. To retrain residue classification model, run
 ```
 python models/frame.py
 ```
-3. To run classification model from trained residue classification model checkpoint run
+3. To run classification model from trained residue classification model checkpoint, run
 ```
 python models/rbp_identification.py
+```
+4. To create visualizations from paper, run
+```
+python data/visualization.py
 ```

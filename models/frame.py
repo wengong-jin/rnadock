@@ -296,107 +296,122 @@ if __name__ == "__main__":
     model = ClassificationModel(args)
     optimizer = torch.optim.Adam(model.parameters(), lr=args.lr)
     scheduler = lr_scheduler.ExponentialLR(optimizer, args.anneal_rate)
+
+    sequences = []
+    predictions = []
+    ground_truth = []
     
-    # for e in range(args.epochs):
-    #     model.train()
-    #     random.shuffle(train_data)
-    #     true_vals = []
-    #     pred_vals = []
-    #     for i in range(0, len(train_data), args.batch_size):
-    #         print(f'batch_{i}_epoch_{e}')
-    #         optimizer.zero_grad()
-    #         try:
-    #             prot_X_batch = prot_coords_train[i : i + args.batch_size]
-    #             ligand_X_batch = ligand_coords_train[i : i + args.batch_size]
-    #             prot_seq_batch = prot_seqs_train[i : i+args.batch_size]
-    #             ligand_seq_batch = ligand_seqs_train[i : i+args.batch_size]
-    #             y_batch = y_train[i : i + args.batch_size]
-    #         except:
-    #             prot_X_batch = prot_coords_train[i :]
-    #             ligand_X_batch = ligand_coords_train[i :]
-    #             prot_seq_batch = prot_seqs_train[i :]
-    #             ligand_seq_batch = ligand_seqs_train[i :]
-    #             y_batch = y_train[i :]
+    for e in range(args.epochs):
+        model.train()
+        random.shuffle(train_data)
+        true_vals = []
+        pred_vals = []
+        for i in range(0, len(train_data), args.batch_size):
+            print(f'batch_{i}_epoch_{e}')
+            optimizer.zero_grad()
+            try:
+                prot_X_batch = prot_coords_train[i : i + args.batch_size]
+                ligand_X_batch = ligand_coords_train[i : i + args.batch_size]
+                prot_seq_batch = prot_seqs_train[i : i+args.batch_size]
+                ligand_seq_batch = ligand_seqs_train[i : i+args.batch_size]
+                y_batch = y_train[i : i + args.batch_size]
+            except:
+                prot_X_batch = prot_coords_train[i :]
+                ligand_X_batch = ligand_coords_train[i :]
+                prot_seq_batch = prot_seqs_train[i :]
+                ligand_seq_batch = ligand_seqs_train[i :]
+                y_batch = y_train[i :]
 
-    #         loss, y_hat, y_batch, mask = model(prot_X_batch, ligand_X_batch, prot_seq_batch, ligand_seq_batch, y_batch, max_prot_coords, max_ligand_coords)
+            loss, y_hat, y_batch, mask = model(prot_X_batch, ligand_X_batch, prot_seq_batch, ligand_seq_batch, y_batch, max_prot_coords, max_ligand_coords)
 
-    #         if args.classification_type == "binary":
-    #             y_hat = torch.sigmoid(y_hat)
-    #         elif args.classification_type == "multiclass":
-    #             y_hat_mm = F.softmax(y_hat, dim=1)
-    #             y_hat = torch.sum(y_hat_mm.cpu() * torch.arange(args.mlp_output_dim), dim=1) #weighted average
+            if args.classification_type == "binary":
+                y_hat = torch.sigmoid(y_hat)
+            elif args.classification_type == "multiclass":
+                y_hat_mm = F.softmax(y_hat, dim=1)
+                y_hat = torch.sum(y_hat_mm.cpu() * torch.arange(args.mlp_output_dim), dim=1) #weighted average
 
-    #         if args.ligand_structure:
-    #             square = (max_prot_coords, max_ligand_coords)
-    #             protein_mask = np.invert(np.all((mask.T.squeeze().reshape(square) == 0).cpu().detach().numpy(), axis=1)) # if all zero, set to False (protein residue nonexistent)
+            if args.ligand_structure:
+                square = (max_prot_coords, max_ligand_coords)
+                protein_mask = np.invert(np.all((mask.T.squeeze().reshape(square) == 0).cpu().detach().numpy(), axis=1)) # if all zero, set to False (protein residue nonexistent)
 
-    #             masked_y_hat = np.ma.masked_where(~mask.T.squeeze().reshape(square).cpu().detach().numpy().astype(bool), 
-    #                                                 y_hat.reshape(square).cpu().detach().numpy())
-    #             y_hat = masked_y_hat.mean(axis=1) # for y_hat, just take average probability value
-    #             y_hat = y_hat[y_hat.mask == False]
+                masked_y_hat = np.ma.masked_where(~mask.T.squeeze().reshape(square).cpu().detach().numpy().astype(bool), 
+                                                    y_hat.reshape(square).cpu().detach().numpy())
+                y_hat = masked_y_hat.mean(axis=1) # for y_hat, just take average probability value
+                y_hat = y_hat[y_hat.mask == False]
 
-    #             if args.classification_type == "multiclass":
-    #                 masked_y_batch = np.ma.masked_where(~mask.T.squeeze().reshape(square).cpu().detach().numpy().astype(bool), 
-    #                                                 y_batch.reshape(square).cpu().detach().numpy())
-    #                 y_batch = masked_y_batch.min(axis=1)
-    #                 y_batch = y_batch[y_batch.mask == False].T.squeeze()
-    #                 y_hat = np.round(y_hat).T.squeeze()
+                if args.classification_type == "multiclass":
+                    masked_y_batch = np.ma.masked_where(~mask.T.squeeze().reshape(square).cpu().detach().numpy().astype(bool), 
+                                                    y_batch.reshape(square).cpu().detach().numpy())
+                    y_batch = masked_y_batch.min(axis=1)
+                    y_batch = y_batch[y_batch.mask == False].T.squeeze()
+                    y_hat = np.round(y_hat).T.squeeze()
                     
-    #                 expanded_mask = np.repeat(np.expand_dims(~mask.T.squeeze().
-    #                                 reshape(square).cpu().detach().numpy().astype(bool), 
-    #                                 axis=2), args.mlp_output_dim, axis=2)
-    #                 y_hat_mm = np.ma.masked_where(expanded_mask, 
-    #                                 y_hat_mm.reshape((square[0],square[1],
-    #                                 args.mlp_output_dim)).cpu().detach().numpy())
-    #                 y_hat_mm = y_hat_mm.mean(axis=1)
-    #                 y_hat_mm = y_hat_mm[protein_mask]
+                    expanded_mask = np.repeat(np.expand_dims(~mask.T.squeeze().
+                                    reshape(square).cpu().detach().numpy().astype(bool), 
+                                    axis=2), args.mlp_output_dim, axis=2)
+                    y_hat_mm = np.ma.masked_where(expanded_mask, 
+                                    y_hat_mm.reshape((square[0],square[1],
+                                    args.mlp_output_dim)).cpu().detach().numpy())
+                    y_hat_mm = y_hat_mm.mean(axis=1)
+                    y_hat_mm = y_hat_mm[protein_mask]
 
-    #             elif args.classification_type == "binary":
-    #                 y_batch = np.any((y_batch.reshape(square) == 1.).cpu().detach().numpy(), axis=1).astype(int)
-    #                 y_batch = y_batch[protein_mask]
+                elif args.classification_type == "binary":
+                    y_batch = np.any((y_batch.reshape(square) == 1.).cpu().detach().numpy(), axis=1).astype(int)
+                    y_batch = y_batch[protein_mask]
 
-    #         else:
-    #             y_batch = y_batch[mask.bool()].cpu().detach().numpy()
-    #             if args.classification_type == "multiclass":
-    #                 y_hat = np.round(y_hat[mask.bool()].cpu().detach().numpy())
-    #                 y_hat_mm = y_hat_mm[mask.bool()].cpu().detach().numpy()
-    #             elif args.classification_type == "binary":
-    #                 y_hat = y_hat[mask.bool()].cpu().detach().numpy()
+            else:
+                y_batch = y_batch[mask.bool()].cpu().detach().numpy()
+                if args.classification_type == "multiclass":
+                    y_hat = np.round(y_hat[mask.bool()].cpu().detach().numpy())
+                    y_hat_mm = y_hat_mm[mask.bool()].cpu().detach().numpy()
+                elif args.classification_type == "binary":
+                    y_hat = y_hat[mask.bool()].cpu().detach().numpy()
 
-    #         if args.classification_type == "binary":
-    #             true_vals.extend(y_batch.tolist())
-    #             pred_vals.extend(y_hat.tolist())
-    #             try:
-    #                 print(roc_auc_score(y_batch,y_hat))
-    #             except:
-    #                 print('one class present')
-    #         else:
-    #             true_vals.extend(y_batch.tolist())
-    #             pred_vals.append(y_hat_mm)
-    #             print(f1_score(y_batch,y_hat, average='weighted'))
+            if args.classification_type == "binary":
+                true_vals.extend(y_batch.tolist())
+                pred_vals.extend(y_hat.tolist())
+                predictions.append(y_hat.tolist())
+                ground_truth.append(y_batch.tolist())
+                sequences.append(prot_seq_batch[0])
+                try:
+                    print(roc_auc_score(y_batch,y_hat))
+                except:
+                    print('one class present')
+            else:
+                true_vals.extend(y_batch.tolist())
+                pred_vals.append(y_hat_mm)
+                print(f1_score(y_batch,y_hat, average='weighted'))
 
-    #         loss.backward()
-    #         nn.utils.clip_grad_norm_(model.parameters(), args.clip_norm)
-    #         optimizer.step()
+            loss.backward()
+            nn.utils.clip_grad_norm_(model.parameters(), args.clip_norm)
+            optimizer.step()
 
-    #     if args.classification_type == "binary":
-    #         scores_df = pd.DataFrame({'label':true_vals,'score':pred_vals})
-    #         model.blm.add_model(f'epoch_{e}', scores_df)
-    #         model.blm.plot_roc(model_names=[f'epoch_{e}'],params={"save":True,"prefix":f"charts/epoch_{e}_"})
-    #     else:
-    #         names = [f"{i} Angstroms" for i in range(args.mlp_output_dim)]
-    #         true_vals = np.array(true_vals)
-    #         pred_vals = np.concatenate(pred_vals, axis=0)
-    #         blm = ovr(true_vals, pred_vals, names)
-    #         blm.plot_roc(chart_types=[1,2], params={"legloc":4, "addsz":False, "save":True, "prefix":f"charts/epoch_{e}_"})
+        if args.classification_type == "binary":
 
-    #     filename = f'model_checkpoints/rna_full_binary_noligand_epoch_{e}.pt'
-    #     torch.save({
-    #         'epoch': e,
-    #         'model_state_dict': model.state_dict(),
-    #         'optimizer_state_dict': optimizer.state_dict(),
-    #         'loss': loss,
-    #         }, filename)
+            visualization_df = pd.DataFrame(
+            {'sequences': sequences,
+                'predictions': predictions,
+                'ground_truth': ground_truth
+            })
+            visualization_df.to_csv("charts_rna_binary_noligand_fullrun/visualization_train_info.csv",index=False)
+
+            # scores_df = pd.DataFrame({'label':true_vals,'score':pred_vals})
+            # model.blm.add_model(f'epoch_{e}', scores_df)
+            # model.blm.plot_roc(model_names=[f'epoch_{e}'],params={"save":True,"prefix":f"charts/epoch_{e}_"})
+        else:
+            names = [f"{i} Angstroms" for i in range(args.mlp_output_dim)]
+            true_vals = np.array(true_vals)
+            pred_vals = np.concatenate(pred_vals, axis=0)
+            blm = ovr(true_vals, pred_vals, names)
+            blm.plot_roc(chart_types=[1,2], params={"legloc":4, "addsz":False, "save":True, "prefix":f"charts/epoch_{e}_"})
+
+        filename = f'model_checkpoints/rna_full_binary_noligand_epoch_{e}.pt'
+        torch.save({
+            'epoch': e,
+            'model_state_dict': model.state_dict(),
+            'optimizer_state_dict': optimizer.state_dict(),
+            'loss': loss,
+            }, filename)
 
     checkpoint = torch.load("model_checkpoints/rna_full_binary_noligand_epoch_9.pt")
     model.load_state_dict(checkpoint['model_state_dict'])
@@ -410,6 +425,7 @@ if __name__ == "__main__":
     sequences = []
     predictions = []
     ground_truth = []
+
 
     for i in range(0, len(test_data), args.batch_size):
         prot_X_batch = prot_coords_test[i : i + args.batch_size]
@@ -453,6 +469,7 @@ if __name__ == "__main__":
             elif args.classification_type == "binary":
                 y_batch = np.any((y_batch.reshape(square) == 1.).cpu().detach().numpy(), axis=1).astype(int)
                 y_batch = y_batch[protein_mask]
+
         else:
             y_batch = y_batch[mask.bool()].cpu().detach().numpy()
             if args.classification_type == "multiclass":
@@ -476,7 +493,6 @@ if __name__ == "__main__":
             pred_vals_test.append(y_hat_mm)
             print(f1_score(y_batch,y_hat, average='weighted'))
 
-    
 
     if args.classification_type == "binary":
         # visualization_df = pd.DataFrame(

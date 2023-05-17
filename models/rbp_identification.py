@@ -216,6 +216,9 @@ if __name__ == "__main__":
     train_data, rbp_identity_train = ProteinStructureDataset.combine_sets(rbp_train_data, non_rbp_train_data)
     test_data, rbp_identity_test = ProteinStructureDataset.combine_sets(rbp_test_data, non_rbp_test_data)
 
+    print(len(rbp_test_data))
+    print(len(non_rbp_test_data))
+
     print('Train/test data:', len(train_data), len(test_data))
     
     prot_len_lst = [len(entry['target_coords']) for entry in train_data+test_data]

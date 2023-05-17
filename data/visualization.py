@@ -6,14 +6,11 @@ import pandas as pd
 import re
 import seaborn as sns
 
-def visualize_match(sequence, pred_lst, true_lst):
+def visualize_match(sequence, pred_lst, true_lst, idx):
     assert len(sequence) == len(pred_lst) and len(sequence) == len(true_lst)
-    print(np.sum(np.expand_dims(np.array(pred_lst), axis=1)))
-    print(np.sum(np.expand_dims(np.array(true_lst), axis=1)))
-    print(len(sequence))
     arr = np.concatenate((np.expand_dims(np.array(pred_lst), axis=1), np.expand_dims(np.array(true_lst), axis=1)), axis=1).T
-    fig, ax = plt.subplots(figsize=(90,5))
-    sns.heatmap(arr, annot=False, linewidth = .5, yticklabels=["pred","true"], xticklabels=sequence).figure.savefig("visualizations/chart.png")
+    fig, ax = plt.subplots(figsize=(20,5))
+    sns.heatmap(arr[:,100:200], annot=False, linewidth = .5, yticklabels=["pred","true"], xticklabels=sequence[100:200]).figure.savefig(f"visualizations/heatmap_example{idx}.png", dpi=1200)
 
 def get_contiguous_predicted_sites(sequence, pred_lst):
     pred_arr = np.where(np.array(pred)>0.19, 1, 0)
@@ -33,52 +30,81 @@ def get_contiguous_predicted_sites(sequence, pred_lst):
     
     return sites
 
-def generate_substrings(strings):
+def generate_substrings(strings, prot_labels):
     substrings = []
-    for s in strings:
+    labels = []
+    for k in range(len(strings)):
+        s = strings[k]
         for i in range(len(s)):
             for j in range(i+1, len(s)+1):
                 if len(s[i:j]) >= 5:
                     substrings.append(s[i:j])
-    return substrings
+                    labels.append(prot_labels[k])
+    return substrings, labels
 
-def most_frequent_words(lst, n):
+def most_frequent_words(lst, n, prot_labels):
     dct = {}
+    represented_prots = []
+    words = []
     word_counts = Counter(lst)
     top_n = word_counts.most_common(n)
     for word, count in top_n:
         dct[word] = count
-    return dct
+        indexes = [i for i in range(len(lst)) if lst[i] == word]
+        for idx in indexes:
+            represented_prots.append(prot_labels[idx])
+            words.append(word)
+    return dct, represented_prots, words
 
 def plot_histogram(data):
     labels = list(data.keys())
     frequencies = list(data.values())
+    
+    filtered_labels = []
+    filtered_frequencies = []
+    for i in range(len(labels)):
+        dont_add = False
+        for j in range(len(labels)):
+            if i == j:
+                pass
+            else:
+                if labels[i] in labels[j] and frequencies[i] <= frequencies[j]:
+                    dont_add = True
+        if not dont_add:
+            filtered_labels.append(labels[i])
+            filtered_frequencies.append(frequencies[i])
 
-    fig, ax = plt.subplots(figsize=(30,15))
+    fig, ax = plt.subplots(figsize=(8,5))
+    d = {"Sequences": filtered_labels, "Frequencies": filtered_frequencies}
+    df = pd.DataFrame(d)
 
-    ax.bar(labels, frequencies)
+    sns.set_palette("magma")
+    fig = sns.barplot(data=df, x="Sequences", y="Frequencies", palette="rocket",ax=ax)
     ax.set_xlabel('Sequences')
     ax.set_ylabel('Frequency')
-    ax.set_title('Histogram of K-mers')
-    plt.xticks(rotation=90)
-
-    plt.savefig("visualizations/kmer_hist.png")
+    ax.set_title('Most Common K-mers in Predicted Binding Sites [Validation]')
+    ax.set_xticklabels(filtered_labels, rotation=90)
+    plt.tight_layout()
+    plt.savefig("visualizations/kmer_hist_val_pred_3.png", dpi=1200)
 
 if __name__ == "__main__":
-    df = pd.read_csv("charts_rna_binary_noligand_fullrun/visualization_info.csv")
+    df = pd.read_csv("charts_rna_binary_noligand_fullrun/visualization_pred_info.csv")
 
     contiguous_predicted_seqs = []
+    protein_identity = []
 
     for i in range(len(df)):
         seq, pred, true = (df.iloc[i][0], df.iloc[i][1], df.iloc[i][2])
         pred = ast.literal_eval(pred)
         true = ast.literal_eval(true)
+        
+        # visualize_match(seq, pred, true, i)
+        # if i == 17:
+        #     break
 
         contiguous_predicted_seqs.extend(get_contiguous_predicted_sites(seq, pred))
+        protein_identity.extend(len(contiguous_predicted_seqs) * [i])
     
-    kmers = generate_substrings(contiguous_predicted_seqs)
-    kmer_dict = most_frequent_words(kmers, 50)
+    kmers, prot_labels = generate_substrings(contiguous_predicted_seqs, protein_identity)
+    kmer_dict, represented_prots, words = most_frequent_words(kmers, 200, prot_labels)
     plot_histogram(kmer_dict)
-
-    
-        

@@ -46,7 +46,7 @@ def get_coord(res):
 
 def process(tup):
     pdb_id, aff = tup
-    structure = parsePDB(f'raw/{pdb_id}.ent.pdb', model=1)
+    structure = parsePDB(f'PDBBind/{pdb_id}.ent.pdb', model=1)
     if structure.select('protein') is None or structure.select('nucleic') is None:
         return None
 

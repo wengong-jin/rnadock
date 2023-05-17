@@ -1,0 +1,16 @@
+# ignore all pdb files
+*.pdb
+*.png
+*.pyc
+*.gz
+*.pickle
+*.fasta
+*.tsv
+*.pt
+*.txt
+*.sh
+*.out
+*.dbtype
+*.index
+*.source
+*.csv

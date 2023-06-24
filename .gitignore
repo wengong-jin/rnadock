@@ -6,11 +6,12 @@
 *.pickle
 *.fasta
 *.tsv
-*.pt
 *.txt
+*.pt
 *.sh
 *.out
 *.dbtype
 *.index
 *.source
 *.csv
+*.pt

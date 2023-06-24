@@ -55,7 +55,7 @@ def bound(rec_atom_coords, rna_coords_array):
     else:
         return False
 
-def create_datapoint(filepath):
+def create_rna_datapoint(filepath):
 
 
     pdb_file = pdb.PDBFile.read(filepath)
@@ -65,11 +65,10 @@ def create_datapoint(filepath):
     target_seq = structure[structure.atom_name == 'CA'].res_name
     rna_coords = structure[structure.atom_name == "C3\'"].coord
     rna_seq = structure[structure.atom_name == "C3\'"].res_name
-    print(len(rna_seq))
     name = filepath[9:-4]
 
-    if len(target_coords) > 1000 or len(rna_coords) > 800:
-        raise Exception(f"{filepath} had >1200 residues or >800 nucleotides")
+    if len(target_coords) > 1200 or len(rna_coords) > 800 or len(target_coords) < 20 or len(rna_coords) < 5:
+        raise Exception(f"{filepath} had >1200 residues or >800 nucleotides or too short.")
 
     # compute binary mask
     mask = [0 for i in range(len(target_coords))]
@@ -79,16 +78,27 @@ def create_datapoint(filepath):
             mask[j] = 1
     distances = cdist(target_coords, rna_coords) # number of protein coords x number of rna coords
 
-    # modify target sequence (remove nonstandard amino acids)
-    try:
-        target_seq = ''.join([protein_letters_3to1[three_letter_code] for three_letter_code 
-                                                in target_seq.tolist()])
-    except Exception as e:
-        return None
+    print(len(rna_seq))
+    print(rna_coords.shape)
+
+    # modify target/rna sequences (remove nonstandard amino acids/nucleotides)
+    clean_target_seq = []
+    for three_letter_code in target_seq.tolist():
+        if three_letter_code in protein_letters_3to1:
+            clean_target_seq.append(protein_letters_3to1[three_letter_code])
+        else:
+            clean_target_seq.append('X') #nonstandard amino acid
     
-    # filter out complexes where no alpha carbons are within 7 Angstroms of RNA
+    clean_rna_seq = []
+    for nucleotide in rna_seq:
+        if nucleotide in ['A', 'U', 'C', 'G']:
+            clean_rna_seq.append(nucleotide)
+        else:
+            clean_rna_seq.append('Z') #nonstandard nucleotide
+
+    # filter out complexes where no alpha carbons are within 10 Angstroms of RNA
     if sum (mask) > 0:
-        return {'target_coords': target_coords, 'ligand_seq': rna_seq, 'ligand_coords': rna_coords, 'target_seq':target_seq, 'binary_mask': mask, 'cluster':'na', 'pairwise_dists': distances}, name, target_seq
+        return {'target_coords': target_coords, 'ligand_seq': ''.join(clean_rna_seq), 'ligand_coords': rna_coords, 'target_seq': ''.join(clean_target_seq), 'binary_mask': mask, 'cluster':'na', 'pairwise_dists': distances}, name, ''.join(clean_target_seq)
     else:
         return None
 
@@ -172,8 +182,8 @@ def create_non_rbp_datapoint(filepath):
     return {'target_coords': target_coords, 'target_seq':target_seq, 'cluster':'na'}, name, target_seq
     
 if __name__ == "__main__":
-    pdb_out_dir = "data/non_rbp"
-    data_csv = "data/select.csv"
+    pdb_out_dir = "src/data/pdb"
+    data_csv = "src/data/select.csv"
 
     # load_and_filter(data_csv, pdb_out_dir)
 
@@ -188,7 +198,7 @@ if __name__ == "__main__":
         # returns entry dict with keys target_coords,
         # rna_seq, binary_mask
         try:
-            entry, name, seq = create_non_rbp_datapoint(filepath)
+            entry, name, seq = create_rna_datapoint(filepath)
             if entry:
                 dataset[name] = entry
                 list_seq.append(seq)
@@ -200,12 +210,14 @@ if __name__ == "__main__":
             print(f"Error on {filepath}.")
             print(e)
 
-    ofile = open("data/fasta_non_rbp.txt", "w")
+    ofile = open("src/data/fasta_binding_site_prediction.txt", "w")
     for i in range(len(list_seq)):
+        print(list_name[i])
+        print(list_seq[i])
         ofile.write(">" + list_name[i] + "\n" +list_seq[i] + "\n")
     ofile.close()
 
-    os.system("mmseqs easy-cluster data/fasta_non_rbp.txt clusterRes tmp --min-seq-id 0.5 --cov-mode 1")
+    os.system("mmseqs easy-cluster src/data/fasta_binding_site_prediction.txt clusterRes tmp --min-seq-id 0.8 --cov-mode 1")
 
     with open("clusterRes_all_seqs.fasta") as f:
         lines = f.readlines()
@@ -221,5 +233,5 @@ if __name__ == "__main__":
             else:
                 pass
     
-    with open('dataset_non_rbp.pickle', 'wb') as handle:
+    with open('src/data/dataset_rna_2.pickle', 'wb') as handle:
         pickle.dump(list(dataset.values()), handle)

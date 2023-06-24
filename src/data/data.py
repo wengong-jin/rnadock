@@ -84,7 +84,7 @@ class ProteinDataset():
                     test_ligand_seqs.append(entry['ligand_seq'])
                     test_masks.append(entry['binary_mask'])
                     test_y.append(entry['pairwise_dists'])
-        
+
         self.data["Train"]["Protein"]["Coords"] = train_target_coords
         self.data["Train"]["Protein"]["Seqs"] = train_target_seqs
         self.data["Train"]["Ligand"]["Coords"] = train_ligand_coords
@@ -122,21 +122,22 @@ class ProteinDataset():
             self.data["Train"][f"Fold_{i}"]["Val"]["Binary_Masks"] = []
             self.data["Train"][f"Fold_{i}"]["Val"]["Pairwise_Dists"] = []
 
-        for idx in rand_list:
-            self.data["Train"][f"Fold_{idx}"]["Val"]["Protein"]["Coords"].append(self.data["Train"]["Protein"]["Coords"][idx])
-            self.data["Train"][f"Fold_{idx}"]["Val"]["Protein"]["Seqs"].append(self.data["Train"]["Protein"]["Seqs"][idx])
-            self.data["Train"][f"Fold_{idx}"]["Val"]["Ligand"]["Coords"].append(self.data["Train"]["Ligand"]["Coords"][idx])
-            self.data["Train"][f"Fold_{idx}"]["Val"]["Ligand"]["Seqs"].append(self.data["Train"]["Ligand"]["Seqs"][idx])
-            self.data["Train"][f"Fold_{idx}"]["Val"]["Binary_Masks"].append(self.data["Train"]["Binary_Masks"][idx])
-            self.data["Train"][f"Fold_{idx}"]["Val"]["Pairwise_Dists"].append(self.data["Train"]["Pairwise_Dists"][idx])
+        for i in range(len(rand_list)):
+            idx = rand_list[i]
+            self.data["Train"][f"Fold_{idx}"]["Val"]["Protein"]["Coords"].append(self.data["Train"]["Protein"]["Coords"][i])
+            self.data["Train"][f"Fold_{idx}"]["Val"]["Protein"]["Seqs"].append(self.data["Train"]["Protein"]["Seqs"][i])
+            self.data["Train"][f"Fold_{idx}"]["Val"]["Ligand"]["Coords"].append(self.data["Train"]["Ligand"]["Coords"][i])
+            self.data["Train"][f"Fold_{idx}"]["Val"]["Ligand"]["Seqs"].append(self.data["Train"]["Ligand"]["Seqs"][i])
+            self.data["Train"][f"Fold_{idx}"]["Val"]["Binary_Masks"].append(self.data["Train"]["Binary_Masks"][i])
+            self.data["Train"][f"Fold_{idx}"]["Val"]["Pairwise_Dists"].append(self.data["Train"]["Pairwise_Dists"][i])
             for i in range(k):
                 if idx != i:
-                    self.data["Train"][f"Fold_{idx}"]["Train"]["Protein"]["Coords"].append(self.data["Train"]["Protein"]["Coords"][idx])
-                    self.data["Train"][f"Fold_{idx}"]["Train"]["Protein"]["Seqs"].append(self.data["Train"]["Protein"]["Seqs"][idx])
-                    self.data["Train"][f"Fold_{idx}"]["Train"]["Ligand"]["Coords"].append(self.data["Train"]["Ligand"]["Coords"][idx])
-                    self.data["Train"][f"Fold_{idx}"]["Train"]["Ligand"]["Seqs"].append(self.data["Train"]["Ligand"]["Seqs"][idx])
-                    self.data["Train"][f"Fold_{idx}"]["Train"]["Binary_Masks"].append(self.data["Train"]["Binary_Masks"][idx])
-                    self.data["Train"][f"Fold_{idx}"]["Train"]["Pairwise_Dists"].append(self.data["Train"]["Pairwise_Dists"][idx])
+                    self.data["Train"][f"Fold_{idx}"]["Train"]["Protein"]["Coords"].append(self.data["Train"]["Protein"]["Coords"][i])
+                    self.data["Train"][f"Fold_{idx}"]["Train"]["Protein"]["Seqs"].append(self.data["Train"]["Protein"]["Seqs"][i])
+                    self.data["Train"][f"Fold_{idx}"]["Train"]["Ligand"]["Coords"].append(self.data["Train"]["Ligand"]["Coords"][i])
+                    self.data["Train"][f"Fold_{idx}"]["Train"]["Ligand"]["Seqs"].append(self.data["Train"]["Ligand"]["Seqs"][i])
+                    self.data["Train"][f"Fold_{idx}"]["Train"]["Binary_Masks"].append(self.data["Train"]["Binary_Masks"][i])
+                    self.data["Train"][f"Fold_{idx}"]["Train"]["Pairwise_Dists"].append(self.data["Train"]["Pairwise_Dists"][i])
 
         self.data["Train"].pop("Protein")
         self.data["Train"].pop("Ligand")
@@ -177,8 +178,8 @@ class ProteinDataset():
                 self.data[split]["Ligand"]["Coords"] = ligand_X
                 self.data[split]["Pairwise_Dists"] = y
 
-    def get_batch(self, idx, batch_size, f, split):
-        data = self.data["Train"][f"Fold_{f}"][split]
+    def get_batch(self, idx, batch_size, f, split_1, split_2):
+        data = self.data[split_1][f"Fold_{f}"][split_2]
         
         if idx+batch_size < data["Protein"]["Coords"].shape[0]:
             prot_X = data["Protein"]["Coords"][idx:idx+batch_size]

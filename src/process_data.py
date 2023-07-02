@@ -50,7 +50,7 @@ def bound(rec_atom_coords, rna_coords_array):
     dists = np.sum(dists, axis=1)
     dists = np.sqrt(dists)
     
-    if np.min(dists) < 10:
+    if np.min(dists) < 5:
         return True
     else:
         return False
@@ -153,6 +153,62 @@ def create_peptide_datapoint(filepath):
     else:
         return None
 
+def create_geobind_datapoint(line):
+    # input is one line in txt file
+    pdb_id = line.split(":")[0]
+    protein_chain = line.split(":")[1]
+    ligand_chains = line.split(":")[2].split("\t")[0].split("_")
+    filepath = f'/home/dnori/rnadock/GeoBind/Dataset/downloaded_pdbs/{pdb_id}.pdb'
+
+    urllib.request.urlretrieve(f'http://files.rcsb.org/download/{pdb_id}.pdb', filepath)
+    pdb_file = pdb.PDBFile.read(filepath)
+    structure = pdb_file.get_structure()[0]
+
+    dps = []
+
+    for lc in ligand_chains:
+        chain_1 = structure[structure.chain_id == protein_chain]
+        chain_2 = structure[structure.chain_id == lc]
+
+        bound_res_ids = " ".join(line[line.index(f"{protein_chain}_{lc}"):].split(" ")[1:])
+        if ":" in bound_res_ids:
+            bound_res_ids = bound_res_ids[:bound_res_ids.index(":")]
+        else:
+            bound_res_ids = bound_res_ids[:-1]
+        bound_res_ids = [int(s[1:]) for s in bound_res_ids.split(" ")]
+
+        full_target_coords = chain_1.coord
+        target_coords = chain_1[chain_1.atom_name == 'CA'].coord # operating just on backbone carbon
+        res_ids = chain_1[chain_1.atom_name == 'CA'].res_id
+        target_seq = chain_1[chain_1.atom_name == 'CA'].res_name
+        rna_coords = chain_2[chain_2.atom_name == "C3\'"].coord
+        rna_seq = chain_2[chain_2.atom_name == "C3\'"].res_name
+        name = f"{pdb}_{protein_chain}_{lc}"
+
+        # compute binary mask
+        mask = [0 for i in range(len(target_coords))]
+        for j in range(len(target_coords)):
+            if res_ids[j] in bound_res_ids:
+                mask[j] = 1
+
+        # modify target/rna sequences (remove nonstandard amino acids/nucleotides)
+        clean_target_seq = []
+        for three_letter_code in target_seq.tolist():
+            if three_letter_code in protein_letters_3to1:
+                clean_target_seq.append(protein_letters_3to1[three_letter_code])
+            else:
+                clean_target_seq.append('X') #nonstandard amino acid
+        
+        clean_rna_seq = []
+        for nucleotide in rna_seq:
+            if nucleotide in ['A', 'U', 'C', 'G']:
+                clean_rna_seq.append(nucleotide)
+            else:
+                clean_rna_seq.append('Z') #nonstandard nucleotide
+
+        dps.append({'pdb': name, 'target_coords': target_coords, 'ligand_seq': ''.join(clean_rna_seq), 'ligand_coords': rna_coords, 'target_seq': ''.join(clean_target_seq), 'binary_mask': mask})
+
+    return dps        
 
 def create_non_rbp_datapoint(filepath):
 
@@ -185,51 +241,56 @@ if __name__ == "__main__":
 
     # load_and_filter(data_csv, pdb_out_dir)
 
-    dirs = os.listdir(pdb_out_dir)
+    # dirs = os.listdir(pdb_out_dir)
 
-    dataset = {}
-    list_seq = []
-    list_name = []
-    for f in tqdm.tqdm(dirs, desc = 'dirs'):
-        filepath = os.path.join(pdb_out_dir, f)
+    # dataset = {}
+    # list_seq = []
+    # list_name = []
+    # for f in tqdm.tqdm(dirs, desc = 'dirs'):
+    #     filepath = os.path.join(pdb_out_dir, f)
 
-        # returns entry dict with keys target_coords,
-        # rna_seq, binary_mask
-        try:
-            entry, name, seq = create_rna_datapoint(filepath)
-            if entry:
-                dataset[name] = entry
-                list_seq.append(seq)
-                list_name.append(name)
-            else:
-                raise Exception(f"{filepath} has no alpha carbons within 10 Angstroms.")
-            print(f"Successfully processed {filepath}.")
-        except Exception as e:
-            print(f"Error on {filepath}.")
-            print(e)
+    #     # returns entry dict with keys target_coords,
+    #     # rna_seq, binary_mask
+    #     try:
+    #         entry, name, seq = create_rna_datapoint(filepath)
+    #         if entry:
+    #             dataset[name] = entry
+    #             list_seq.append(seq)
+    #             list_name.append(name)
+    #         else:
+    #             raise Exception(f"{filepath} has no alpha carbons within 10 Angstroms.")
+    #         print(f"Successfully processed {filepath}.")
+    #     except Exception as e:
+    #         print(f"Error on {filepath}.")
+    #         print(e)
 
-    ofile = open("src/data/fasta_binding_site_prediction.txt", "w")
-    for i in range(len(list_seq)):
-        print(list_name[i])
-        print(list_seq[i])
-        ofile.write(">" + list_name[i] + "\n" +list_seq[i] + "\n")
-    ofile.close()
+    # ofile = open("src/data/fasta_binding_site_prediction.txt", "w")
+    # for i in range(len(list_seq)):
+    #     print(list_name[i])
+    #     print(list_seq[i])
+    #     ofile.write(">" + list_name[i] + "\n" +list_seq[i] + "\n")
+    # ofile.close()
 
-    os.system("mmseqs easy-cluster src/data/fasta_binding_site_prediction.txt clusterRes tmp --min-seq-id 0.8 --cov-mode 1")
+    # os.system("mmseqs easy-cluster src/data/fasta_binding_site_prediction.txt clusterRes tmp --min-seq-id 0.8 --cov-mode 1")
 
-    with open("clusterRes_all_seqs.fasta") as f:
-        lines = f.readlines()
-        current_cluster = lines[0][1:-1]
-        print(current_cluster)
-        for i in range(1, len(lines)-1):
-            if lines[i][0] == ">" and lines[i-1][0] == ">":
-                # new cluster label
-                current_cluster = lines[i-1][1:-1]
-                dataset[lines[i][1:-1]]["cluster"] = current_cluster
-            elif lines[i][0] == ">":
-                dataset[lines[i][1:-1]]["cluster"] = current_cluster
-            else:
-                pass
+    # with open("clusterRes_all_seqs.fasta") as f:
+    #     lines = f.readlines()
+    #     current_cluster = lines[0][1:-1]
+    #     print(current_cluster)
+    #     for i in range(1, len(lines)-1):
+    #         if lines[i][0] == ">" and lines[i-1][0] == ">":
+    #             # new cluster label
+    #             current_cluster = lines[i-1][1:-1]
+    #             dataset[lines[i][1:-1]]["cluster"] = current_cluster
+    #         elif lines[i][0] == ">":
+    #             dataset[lines[i][1:-1]]["cluster"] = current_cluster
+    #         else:
+    #             pass
     
-    with open('src/data/dataset_rna_2.pickle', 'wb') as handle:
-        pickle.dump(list(dataset.values()), handle)
+    # with open('src/data/dataset_rna_2.pickle', 'wb') as handle:
+    #     pickle.dump(list(dataset.values()), handle)
+
+    file1 = open("/home/dnori/rnadock/GeoBind/Dataset_lists/GeoBind/RNA-663_Train.txt", "r")
+    lines = file1.readlines()
+    for line in lines:
+        create_geobind_datapoint(line)

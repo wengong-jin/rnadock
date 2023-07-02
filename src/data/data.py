@@ -46,37 +46,48 @@ class ProteinDataset():
             if 'pairwise_dists' in self.raw_data[0].keys() and type(entry['pairwise_dists']) != torch.Tensor:
                 entry['pairwise_dists'] = torch.from_numpy(entry['pairwise_dists']).float()
 
-    def train_test_split(self, train_test_split=0.8, seq_split=True):
-
+    def train_test_split(self, train_test_split=0.8, seq_split=True, k=4):
         self.data = {"Train": {"Protein":{}, "Ligand":{}}, "Test": {"Protein":{}, "Ligand":{}}}
         cluster_representatives = list(set([d.get('cluster', None) for d in self.raw_data]))
+        split_idx = int((train_test_split * len(cluster_representatives)))
+        rand_cluster_list = [random.randint(1,k) for n in range(split_idx)]
 
         train_target_coords = []
         train_target_seqs = []
+        train_target_chain_ids = []
         train_ligand_coords = []
         train_ligand_seqs = []
         train_masks = []
         train_y = []
+        train_pdbs = []
 
         test_target_coords = []
         test_target_seqs = []
+        test_target_chain_ids = []
         test_ligand_coords = []
         test_ligand_seqs = []
         test_masks = []
         test_y = []
+        test_pdbs = []
+
+        self.rand_fold_list = []
 
         if seq_split:
             # sequence similarity split - sequences with >=80% similarity will not be 
             # devided between train and test
             # train_test_split gives percentage of data points in train (0.8)
             for entry in tqdm.tqdm(self.raw_data, desc = 'train test split'):
-                if cluster_representatives.index(entry['cluster']) < (0.8 * len(cluster_representatives)):
+                if cluster_representatives.index(entry['cluster']) < split_idx:
                     train_target_coords.append(entry['target_coords'])
                     train_target_seqs.append(entry['target_seq'])
                     train_ligand_coords.append(entry['ligand_coords'])
                     train_ligand_seqs.append(entry['ligand_seq'])
                     train_masks.append(entry['binary_mask'])
                     train_y.append(entry['pairwise_dists'])
+                    train_pdbs.append(entry['pdb'])
+                    train_target_chain_ids.append(entry['target_chain_ids'])
+                    self.rand_fold_list.append(rand_cluster_list[cluster_representatives.index(entry['cluster'])])
+
                 else:
                     test_target_coords.append(entry['target_coords'])
                     test_target_seqs.append(entry['target_seq'])
@@ -84,20 +95,26 @@ class ProteinDataset():
                     test_ligand_seqs.append(entry['ligand_seq'])
                     test_masks.append(entry['binary_mask'])
                     test_y.append(entry['pairwise_dists'])
+                    test_pdbs.append(entry['pdb'])
+                    test_target_chain_ids.append(entry['target_chain_ids'])
 
         self.data["Train"]["Protein"]["Coords"] = train_target_coords
         self.data["Train"]["Protein"]["Seqs"] = train_target_seqs
+        self.data["Train"]["Protein"]["Chains"] = train_target_chain_ids
         self.data["Train"]["Ligand"]["Coords"] = train_ligand_coords
         self.data["Train"]["Ligand"]["Seqs"] = train_ligand_seqs
         self.data["Train"]["Binary_Masks"] = train_masks
         self.data["Train"]["Pairwise_Dists"] = train_y
+        self.data["Train"]["PDB"] = train_pdbs
 
         self.data["Test"]["Protein"]["Coords"] = test_target_coords
         self.data["Test"]["Protein"]["Seqs"] = test_target_seqs
+        self.data["Test"]["Protein"]["Chains"] = test_target_chain_ids
         self.data["Test"]["Ligand"]["Coords"] = test_ligand_coords
         self.data["Test"]["Ligand"]["Seqs"] = test_ligand_seqs
         self.data["Test"]["Binary_Masks"] = test_masks
         self.data["Test"]["Pairwise_Dists"] = test_y
+        self.data["Test"]["PDB"] = test_pdbs
 
         self.max_protein_length = max([len(seq) for seq in train_target_seqs+test_target_seqs])
         self.max_rna_length = max([len(seq) for seq in train_ligand_seqs+test_ligand_seqs])
@@ -105,44 +122,54 @@ class ProteinDataset():
     def split_train_into_folds(self, k):
         
         num_train = len(self.data["Train"]["Protein"]["Seqs"])
-        rand_list = [random.randint(1,k) for n in range(num_train)]
+        #rand_list = [random.randint(1,k) for n in range(num_train)]
+        rand_list = self.rand_fold_list
 
         for i in range(1,k+1):
             self.data["Train"][f"Fold_{i}"] = {"Train": {"Protein":{}, "Ligand":{}}, "Val": {"Protein":{}, "Ligand":{}}}
             self.data["Train"][f"Fold_{i}"]["Train"]["Protein"]["Coords"] = []
             self.data["Train"][f"Fold_{i}"]["Train"]["Protein"]["Seqs"] = []
+            self.data["Train"][f"Fold_{i}"]["Train"]["Protein"]["Chains"] = []
             self.data["Train"][f"Fold_{i}"]["Train"]["Ligand"]["Coords"] = []
             self.data["Train"][f"Fold_{i}"]["Train"]["Ligand"]["Seqs"] = []
             self.data["Train"][f"Fold_{i}"]["Train"]["Binary_Masks"] = []
             self.data["Train"][f"Fold_{i}"]["Train"]["Pairwise_Dists"] = []
+            self.data["Train"][f"Fold_{i}"]["Train"]["PDB"] = []
             self.data["Train"][f"Fold_{i}"]["Val"]["Protein"]["Coords"] = []
             self.data["Train"][f"Fold_{i}"]["Val"]["Protein"]["Seqs"] = []
+            self.data["Train"][f"Fold_{i}"]["Val"]["Protein"]["Chains"] = []
             self.data["Train"][f"Fold_{i}"]["Val"]["Ligand"]["Coords"] = []
             self.data["Train"][f"Fold_{i}"]["Val"]["Ligand"]["Seqs"] = []
             self.data["Train"][f"Fold_{i}"]["Val"]["Binary_Masks"] = []
             self.data["Train"][f"Fold_{i}"]["Val"]["Pairwise_Dists"] = []
+            self.data["Train"][f"Fold_{i}"]["Val"]["PDB"] = []
 
         for i in range(len(rand_list)):
             idx = rand_list[i]
             self.data["Train"][f"Fold_{idx}"]["Val"]["Protein"]["Coords"].append(self.data["Train"]["Protein"]["Coords"][i])
             self.data["Train"][f"Fold_{idx}"]["Val"]["Protein"]["Seqs"].append(self.data["Train"]["Protein"]["Seqs"][i])
+            self.data["Train"][f"Fold_{idx}"]["Val"]["Protein"]["Chains"].append(self.data["Train"]["Protein"]["Chains"][i])
             self.data["Train"][f"Fold_{idx}"]["Val"]["Ligand"]["Coords"].append(self.data["Train"]["Ligand"]["Coords"][i])
             self.data["Train"][f"Fold_{idx}"]["Val"]["Ligand"]["Seqs"].append(self.data["Train"]["Ligand"]["Seqs"][i])
             self.data["Train"][f"Fold_{idx}"]["Val"]["Binary_Masks"].append(self.data["Train"]["Binary_Masks"][i])
             self.data["Train"][f"Fold_{idx}"]["Val"]["Pairwise_Dists"].append(self.data["Train"]["Pairwise_Dists"][i])
+            self.data["Train"][f"Fold_{idx}"]["Val"]["PDB"].append(self.data["Train"]["PDB"][i])
             for i in range(k):
                 if idx != i:
                     self.data["Train"][f"Fold_{idx}"]["Train"]["Protein"]["Coords"].append(self.data["Train"]["Protein"]["Coords"][i])
                     self.data["Train"][f"Fold_{idx}"]["Train"]["Protein"]["Seqs"].append(self.data["Train"]["Protein"]["Seqs"][i])
+                    self.data["Train"][f"Fold_{idx}"]["Train"]["Protein"]["Chains"].append(self.data["Train"]["Protein"]["Chains"][i])
                     self.data["Train"][f"Fold_{idx}"]["Train"]["Ligand"]["Coords"].append(self.data["Train"]["Ligand"]["Coords"][i])
                     self.data["Train"][f"Fold_{idx}"]["Train"]["Ligand"]["Seqs"].append(self.data["Train"]["Ligand"]["Seqs"][i])
                     self.data["Train"][f"Fold_{idx}"]["Train"]["Binary_Masks"].append(self.data["Train"]["Binary_Masks"][i])
                     self.data["Train"][f"Fold_{idx}"]["Train"]["Pairwise_Dists"].append(self.data["Train"]["Pairwise_Dists"][i])
+                    self.data["Train"][f"Fold_{idx}"]["Train"]["PDB"].append(self.data["Train"]["PDB"][i])
 
         self.data["Train"].pop("Protein")
         self.data["Train"].pop("Ligand")
         self.data["Train"].pop("Binary_Masks")
         self.data["Train"].pop("Pairwise_Dists")
+        self.data["Train"].pop("PDB")
 
     # A = max_num_protein_coords
     # B = max_num_rna_coords
@@ -179,22 +206,29 @@ class ProteinDataset():
                 self.data[split]["Pairwise_Dists"] = y
 
     def get_batch(self, idx, batch_size, f, split_1, split_2):
-        data = self.data[split_1][f"Fold_{f}"][split_2]
+        if split_1 == "Train":
+            data = self.data[split_1][f"Fold_{f}"][split_2]
+        else:
+            data = self.data[split_1]
         
         if idx+batch_size < data["Protein"]["Coords"].shape[0]:
             prot_X = data["Protein"]["Coords"][idx:idx+batch_size]
             ligand_X = data["Ligand"]["Coords"][idx:idx+batch_size]
             prot_seqs = data["Protein"]["Seqs"][idx:idx+batch_size]
             ligand_seqs = data["Ligand"]["Seqs"][idx:idx+batch_size]
+            chains = data["Protein"]["Chains"][idx:idx+batch_size]
             y = data["Pairwise_Dists"][idx:idx+batch_size]
+            pdb = data["PDB"][idx:idx+batch_size]
         else:
             prot_X = data["Protein"]["Coords"][idx:]
             ligand_X = data["Ligand"]["Coords"][idx:]
             prot_seqs = data["Protein"]["Seqs"][idx:]
             ligand_seqs = data["Ligand"]["Seqs"][idx:]
             y = data["Pairwise_Dists"][idx:]
+            pdb = data["PDB"][idx:]
+            chains = data["Protein"]["Chains"][idx:]
 
-        return prot_X, ligand_X, prot_seqs, ligand_seqs, y
+        return prot_X, ligand_X, prot_seqs, ligand_seqs, y, pdb, chains
 
 
 class ProteinBinaryDataset(ProteinDataset):

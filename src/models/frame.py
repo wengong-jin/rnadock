@@ -45,6 +45,7 @@ class ClassificationModel(nn.Module):
         self.esm_model, self.esm_alphabet = torch.hub.load("facebookresearch/esm:main", "esm2_t33_650M_UR50D")
         self.batch_converter = self.esm_alphabet.get_batch_converter()
         self.esm_model.eval()
+        self.args = args
 
     def forward(self, prot_X, ligand_X, seqs, ligand_seqs, y_batch, max_prot_seq_len, max_ligand_seq_len):
         
@@ -56,7 +57,7 @@ class ClassificationModel(nn.Module):
             esm_input.append((f"protein_{s}",sequence))
         batch_labels, batch_strs, batch_tokens = self.batch_converter(esm_input)
 
-        if args.ligand_type=="peptide":
+        if self.args.ligand_type=="peptide":
             esm_input_ligand = []
             pad_mask_ligand = torch.from_numpy(np.ones((ligand_X.shape[0],max_ligand_seq_len)))
             for s in range(len(ligand_seqs)):
@@ -65,7 +66,7 @@ class ClassificationModel(nn.Module):
                 esm_input_ligand.append((f"ligand_{s}",sequence))
             batch_labels_ligand, batch_strs_ligand, batch_tokens_ligand = self.batch_converter(esm_input_ligand)
 
-        elif args.ligand_type=="rna":
+        elif self.args.ligand_type=="rna":
             pad_mask_ligand = torch.from_numpy(np.ones((ligand_X.shape[0],max_ligand_seq_len)))
             for s in range(len(ligand_seqs)):
                 pad_mask_ligand[s,len(ligand_seqs[s]):] = 0
@@ -79,7 +80,7 @@ class ClassificationModel(nn.Module):
                 results = self.esm_model(batch_tokens[i:i+1,:].cuda(), repr_layers=[33], return_contacts=True) #.cuda()
                 token_repr[i,:,:] = results["representations"][33][:,1:-1,:]
 
-            if args.ligand_type=="peptide": 
+            if self.args.ligand_type=="peptide": 
                 token_repr_ligand = torch.from_numpy(np.zeros((batch_tokens_ligand.shape[0],max_ligand_seq_len,1280)))
                 for i in range(len(batch_tokens_ligand)):
                     results_ligand = self.esm_model(batch_tokens_ligand[i:i+1,:].cuda(), repr_layers=[33], return_contacts=True) #.cuda()
@@ -89,11 +90,11 @@ class ClassificationModel(nn.Module):
         h_prot = self.protein_encoder(prot_X.cuda(), h_S=token_repr, mask=pad_mask.cuda()) # h_prot: (batch sz, max prot seq len, encoder hidden dim)
         full_mask = torch.unsqueeze(torch.mm(pad_mask.T, pad_mask_ligand).flatten(), dim=0)
 
-        if args.ligand_structure:
+        if self.args.ligand_structure:
             self.ligand_encoder.cuda()
-            if args.ligand_type=="peptide":
+            if self.args.ligand_type=="peptide":
                 h_lig = self.ligand_encoder(ligand_X.cuda(), h_S=token_repr_ligand, mask=pad_mask_ligand.cuda()) #h_ligand: (batch sz, max ligand seq len, encoder hidden dim)
-            elif args.ligand_type == "rna":
+            elif self.args.ligand_type == "rna":
                 h_lig = self.ligand_encoder(ligand_X.cuda(), h_S=None, mask=pad_mask_ligand.cuda()) #h_ligand: (batch sz, max ligand seq len, encoder hidden dim)
 
             # Repeat and tile h_prot and h_pep to create tensors of shape (batch_size, max_prot_seq_len, max_ligand_seq_len, encoder_hidden_dim)
@@ -107,18 +108,18 @@ class ClassificationModel(nn.Module):
             h = h_concat.view(len(h_prot), max_prot_seq_len * max_ligand_seq_len, 2*args.encoder_hidden_size)
             mask = full_mask
 
-            if args.classification_type == "binary":
+            if self.args.classification_type == "binary":
                 label = y_batch.squeeze().flatten()
-            elif args.classification_type == "multiclass":
+            elif self.args.classification_type == "multiclass":
                 y_batch = y_batch.squeeze().flatten()
                 label = y_batch
         else:
             h = h_prot
             mask = pad_mask.T.squeeze()
             
-            if args.classification_type == "binary":
+            if self.args.classification_type == "binary":
                 label = torch.any((y_batch.squeeze() == 1.), dim=1).long().float()
-            elif args.classification_type == "multiclass":
+            elif self.args.classification_type == "multiclass":
                 y_batch = y_batch.squeeze()
                 square_mask = full_mask.reshape((max_prot_seq_len, max_ligand_seq_len))
                 square_mask = np.where(square_mask == 0, True, False) #masked positions are True
@@ -129,9 +130,9 @@ class ClassificationModel(nn.Module):
         
         self.linear_layers.cuda()
         pred = self.linear_layers(h.float()).squeeze()
-        if args.classification_type == "binary":
+        if self.args.classification_type == "binary":
             loss = F.binary_cross_entropy_with_logits(pred, label.cuda(), reduction = 'none')
-        elif args.classification_type == "multiclass":
+        elif self.args.classification_type == "multiclass":
             loss = F.cross_entropy(pred, label.cuda().type(torch.int64), reduction = 'none')
         loss = (loss * mask.cuda()).sum() / mask.sum() #masking out padded residues
         return loss, pred, label, mask

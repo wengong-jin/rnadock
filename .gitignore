@@ -15,3 +15,7 @@
 *.source
 *.csv
 *.pt
+*.pth
+*.pdf
+*.zip
+tmp/*

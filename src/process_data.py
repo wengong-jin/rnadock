@@ -61,8 +61,9 @@ def create_rna_datapoint(filepath):
     pdb_file = pdb.PDBFile.read(filepath)
     structure = pdb_file.get_structure()[0]
 
-    target_coords = structure[structure.atom_name == 'CA'].coord
+    target_coords = structure[structure.atom_name == 'CA'].coord # operating just on backbone carbon
     target_seq = structure[structure.atom_name == 'CA'].res_name
+    target_chain_ids = structure[structure.atom_name == 'CA'].chain_id.tolist()
     rna_coords = structure[structure.atom_name == "C3\'"].coord
     rna_seq = structure[structure.atom_name == "C3\'"].res_name
     name = filepath[9:-4]
@@ -77,9 +78,6 @@ def create_rna_datapoint(filepath):
         if bound(rec_atom_coord, rna_coords):
             mask[j] = 1
     distances = cdist(target_coords, rna_coords) # number of protein coords x number of rna coords
-
-    print(len(rna_seq))
-    print(rna_coords.shape)
 
     # modify target/rna sequences (remove nonstandard amino acids/nucleotides)
     clean_target_seq = []
@@ -98,7 +96,7 @@ def create_rna_datapoint(filepath):
 
     # filter out complexes where no alpha carbons are within 10 Angstroms of RNA
     if sum (mask) > 0:
-        return {'target_coords': target_coords, 'ligand_seq': ''.join(clean_rna_seq), 'ligand_coords': rna_coords, 'target_seq': ''.join(clean_target_seq), 'binary_mask': mask, 'cluster':'na', 'pairwise_dists': distances}, name, ''.join(clean_target_seq)
+        return {'pdb': name[4:], 'target_chain_ids':target_chain_ids,'target_coords': target_coords, 'ligand_seq': ''.join(clean_rna_seq), 'ligand_coords': rna_coords, 'target_seq': ''.join(clean_target_seq), 'binary_mask': mask, 'cluster':'na', 'pairwise_dists': distances}, name, ''.join(clean_target_seq)
     else:
         return None
 

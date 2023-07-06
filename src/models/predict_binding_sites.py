@@ -1,6 +1,6 @@
 """
 General script which takes the following options:
-- dataset: RNA or ligand
+- dataset: RNA or peptide
 - ligand_structure: True or False
 - binary or 20-class
 """
@@ -124,23 +124,25 @@ if __name__ == "__main__":
     elif args.classification_type == "binary" and args.mlp_output_dim >= 2:
         raise ValueError("for binary, output dimension must be 1")
 
-    # if args.classification_type == "binary":
-    #     dataset = ProteinBinaryDataset(pkl_path)
-    # elif args.classification_type == "multiclass":
-    #     dataset = ProteinMulticlassDataset(pkl_path)
+    if args.classification_type == "binary":
+        dataset = ProteinBinaryDataset(pkl_path)
+    elif args.classification_type == "multiclass":
+        dataset = ProteinMulticlassDataset(pkl_path)
 
-    # # dataset.prep_raw_data()
-    # # dataset.train_test_split(train_test_split=args.train_test_split)
-    # # dataset.split_train_into_folds(args.k_fold_cross_val)
-    # # dataset.prep_for_model(args.k_fold_cross_val)
+    dataset.prep_raw_data()
+    dataset.train_test_split(train_test_split=args.train_test_split)
+    dataset.split_train_into_folds(args.k_fold_cross_val)
+    dataset.prep_for_model(args.k_fold_cross_val)
 
-    # # file = open('output/cross_val/rna_dataset_static.pickle', 'wb')
-    # # pickle.dump(dataset, file)
-    # # file.close()
-
-    file = open('output/cross_val/rna_dataset_static.pickle', 'rb')
-    dataset = pickle.load(file)
+    # make new splits with data.py fix and run
+    file = open('output/cross_val/rna_dataset_static.pickle', 'wb')
+    pickle.dump(dataset, file)
     file.close()
+
+    # file = open('output/cross_val/rna_dataset_static.pickle', 'rb')
+    # dataset = pickle.load(file)
+    # file.close()
+
 
     # 4 fold cross val
     for f in range(1, args.k_fold_cross_val + 1):

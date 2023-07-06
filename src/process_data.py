@@ -158,11 +158,15 @@ def create_geobind_datapoint(line):
     pdb_id = line.split(":")[0]
     protein_chain = line.split(":")[1]
     ligand_chains = line.split(":")[2].split("\t")[0].split("_")
-    filepath = f'/home/dnori/rnadock/GeoBind/Dataset/downloaded_pdbs/{pdb_id}.pdb'
+    filepath = f'/home/dnori/rnadock/GeoBind/Dataset/downloaded_pdbs_test/{pdb_id}.pdb'
 
-    urllib.request.urlretrieve(f'http://files.rcsb.org/download/{pdb_id}.pdb', filepath)
-    pdb_file = pdb.PDBFile.read(filepath)
-    structure = pdb_file.get_structure()[0]
+    try:
+        urllib.request.urlretrieve(f'http://files.rcsb.org/download/{pdb_id}.pdb', filepath)
+        pdb_file = pdb.PDBFile.read(filepath)
+        structure = pdb_file.get_structure()[0]
+    except:
+        print(pdb_id)
+        return []
 
     dps = []
 
@@ -183,7 +187,7 @@ def create_geobind_datapoint(line):
         target_seq = chain_1[chain_1.atom_name == 'CA'].res_name
         rna_coords = chain_2[chain_2.atom_name == "C3\'"].coord
         rna_seq = chain_2[chain_2.atom_name == "C3\'"].res_name
-        name = f"{pdb}_{protein_chain}_{lc}"
+        name = f"{pdb_id}_{protein_chain}_{lc}"
 
         # compute binary mask
         mask = [0 for i in range(len(target_coords))]
@@ -292,5 +296,8 @@ if __name__ == "__main__":
 
     file1 = open("/home/dnori/rnadock/GeoBind/Dataset_lists/GeoBind/RNA-663_Train.txt", "r")
     lines = file1.readlines()
-    for line in lines:
-        create_geobind_datapoint(line)
+    datapoints = []
+    for line in tqdm.tqdm(lines):
+        datapoints.extend(create_geobind_datapoint(line))
+    with open('src/data/geobind_train_rna.pickle', 'wb') as handle:
+        pickle.dump(datapoints, handle)

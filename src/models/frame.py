@@ -29,13 +29,14 @@ class ClassificationModel(nn.Module):
         super(ClassificationModel, self).__init__()
         self.blm = BinaryLabelMetrics()
         self.protein_encoder = FAEncoder(args, "protein")
-        self.ligand_encoder = FAEncoder(args, args.ligand_type)
+        if args.ligand_structure:
+            self.ligand_encoder = FAEncoder(args, args.ligand_type)
         if args.ligand_structure:
             insz = 2 * args.encoder_hidden_size
         else:
             insz = args.encoder_hidden_size
         self.linear_layers = nn.Sequential(
-                nn.Linear(insz, args.mlp_hidden_size),
+                nn.Linear(args.encoder_hidden_size, args.mlp_hidden_size),
                 nn.ReLU(),
                 nn.Linear(args.mlp_hidden_size, args.mlp_hidden_size),
                 nn.ReLU(),
@@ -47,8 +48,7 @@ class ClassificationModel(nn.Module):
         self.esm_model.eval()
         self.args = args
 
-    def forward(self, prot_X, ligand_X, seqs, ligand_seqs, y_batch, max_prot_seq_len, max_ligand_seq_len):
-        
+    def forward(self, prot_X, ligand_X, seqs, ligand_seqs, y_batch, max_prot_seq_len, max_ligand_seq_len, token_repr=None):
         esm_input = []
         pad_mask = torch.from_numpy(np.ones((prot_X.shape[0],max_prot_seq_len)))
         for s in range(len(seqs)):
@@ -57,38 +57,40 @@ class ClassificationModel(nn.Module):
             esm_input.append((f"protein_{s}",sequence))
         batch_labels, batch_strs, batch_tokens = self.batch_converter(esm_input)
 
-        if self.args.ligand_type=="peptide":
-            esm_input_ligand = []
-            pad_mask_ligand = torch.from_numpy(np.ones((ligand_X.shape[0],max_ligand_seq_len)))
-            for s in range(len(ligand_seqs)):
-                sequence = ligand_seqs[s] + "<pad>"*(max_ligand_seq_len - len(ligand_seqs[s]))
-                pad_mask_ligand[s,len(ligand_seqs[s]):] = 0
-                esm_input_ligand.append((f"ligand_{s}",sequence))
-            batch_labels_ligand, batch_strs_ligand, batch_tokens_ligand = self.batch_converter(esm_input_ligand)
+        if ligand_X:
+            if self.args.ligand_type=="peptide":
+                esm_input_ligand = []
+                pad_mask_ligand = torch.from_numpy(np.ones((ligand_X.shape[0],max_ligand_seq_len)))
+                for s in range(len(ligand_seqs)):
+                    sequence = ligand_seqs[s] + "<pad>"*(max_ligand_seq_len - len(ligand_seqs[s]))
+                    pad_mask_ligand[s,len(ligand_seqs[s]):] = 0
+                    esm_input_ligand.append((f"ligand_{s}",sequence))
+                batch_labels_ligand, batch_strs_ligand, batch_tokens_ligand = self.batch_converter(esm_input_ligand)
 
-        elif self.args.ligand_type=="rna":
-            pad_mask_ligand = torch.from_numpy(np.ones((ligand_X.shape[0],max_ligand_seq_len)))
-            for s in range(len(ligand_seqs)):
-                pad_mask_ligand[s,len(ligand_seqs[s]):] = 0
+            elif self.args.ligand_type=="rna":
+                pad_mask_ligand = torch.from_numpy(np.ones((ligand_X.shape[0],max_ligand_seq_len)))
+                for s in range(len(ligand_seqs)):
+                    pad_mask_ligand[s,len(ligand_seqs[s]):] = 0
 
         # per residue representation
-        with torch.no_grad():
-            self.esm_model.to(torch.float16).cuda()
+        if token_repr is None:
+            with torch.no_grad():
+                # self.esm_model.to(torch.float16).cuda()
+                token_repr = torch.from_numpy(np.zeros((batch_tokens.shape[0],max_prot_seq_len,1280)))
+                for i in range(len(batch_tokens)):
+                    results = self.esm_model(batch_tokens[i:i+1,:], repr_layers=[33], return_contacts=True) #.cuda()
+                    token_repr[i,:,:] = results["representations"][33][:,1:-1,:]
 
-            token_repr = torch.from_numpy(np.zeros((batch_tokens.shape[0],max_prot_seq_len,1280)))
-            for i in range(len(batch_tokens)):
-                results = self.esm_model(batch_tokens[i:i+1,:].cuda(), repr_layers=[33], return_contacts=True) #.cuda()
-                token_repr[i,:,:] = results["representations"][33][:,1:-1,:]
-
-            if self.args.ligand_type=="peptide": 
-                token_repr_ligand = torch.from_numpy(np.zeros((batch_tokens_ligand.shape[0],max_ligand_seq_len,1280)))
-                for i in range(len(batch_tokens_ligand)):
-                    results_ligand = self.esm_model(batch_tokens_ligand[i:i+1,:].cuda(), repr_layers=[33], return_contacts=True) #.cuda()
-                    token_repr_ligand[i,:,:] = results_ligand["representations"][33][:,1:-1,:]
+                if self.args.ligand_type=="peptide": 
+                    token_repr_ligand = torch.from_numpy(np.zeros((batch_tokens_ligand.shape[0],max_ligand_seq_len,1280)))
+                    for i in range(len(batch_tokens_ligand)):
+                        results_ligand = self.esm_model(batch_tokens_ligand[i:i+1,:].cuda(), repr_layers=[33], return_contacts=True) #.cuda()
+                        token_repr_ligand[i,:,:] = results_ligand["representations"][33][:,1:-1,:]
 
         self.protein_encoder.cuda()
         h_prot = self.protein_encoder(prot_X.cuda(), h_S=token_repr, mask=pad_mask.cuda()) # h_prot: (batch sz, max prot seq len, encoder hidden dim)
-        full_mask = torch.unsqueeze(torch.mm(pad_mask.T, pad_mask_ligand).flatten(), dim=0)
+        if ligand_X:
+            full_mask = torch.unsqueeze(torch.mm(pad_mask.T, pad_mask_ligand).flatten(), dim=0)
 
         if self.args.ligand_structure:
             self.ligand_encoder.cuda()
@@ -118,7 +120,8 @@ class ClassificationModel(nn.Module):
             mask = pad_mask.T.squeeze()
             
             if self.args.classification_type == "binary":
-                label = torch.any((y_batch.squeeze() == 1.), dim=1).long().float()
+                label = y_batch.squeeze()
+                # label = torch.any((y_batch.squeeze() == 1.), dim=1).long().float()
             elif self.args.classification_type == "multiclass":
                 y_batch = y_batch.squeeze()
                 square_mask = full_mask.reshape((max_prot_seq_len, max_ligand_seq_len))
@@ -168,7 +171,7 @@ class FAEncoder(FrameAveraging):
         super(FAEncoder, self).__init__()
         if mol_type == "protein":
             self.encoder = SRUpp(
-                    args.esm_emb_size + 3,
+                    args.esm_emb_size + 3*20,
                     args.encoder_hidden_size // 2,
                     args.encoder_hidden_size // 2,
                     num_layers=args.depth,
@@ -202,6 +205,8 @@ class FAEncoder(FrameAveraging):
 
         h_X, _, _ = self.create_frame(X, mask)
         mask = mask.unsqueeze(1).expand(-1, 8, -1).reshape(B*8, N)
+
+        h_X = h_X.repeat(1,1,20)
 
         if h_S is not None:
             h_S = h_S.unsqueeze(1).expand(-1, 8, -1, -1).reshape(B*8, N, -1)

@@ -7,10 +7,12 @@ import re
 import seaborn as sns
 
 def visualize_match(sequence, pred_lst, true_lst, idx):
+    sequence = ["X" for i in range(len(true_lst))]
+    # sequence = ''.join([seq[i] for i in range(len(seq)) if i%3 == 0])
     assert len(sequence) == len(pred_lst) and len(sequence) == len(true_lst)
     arr = np.concatenate((np.expand_dims(np.array(pred_lst), axis=1), np.expand_dims(np.array(true_lst), axis=1)), axis=1).T
     fig, ax = plt.subplots(figsize=(20,5))
-    sns.heatmap(arr[:,100:200], annot=False, linewidth = .5, yticklabels=["pred","true"], xticklabels=sequence[100:200]).figure.savefig(f"visualizations/heatmap_example{idx}.png", dpi=1200)
+    sns.heatmap(arr[:,100:200], annot=False, linewidth = .5, yticklabels=["pred","true"], xticklabels=sequence[100:200]).figure.savefig(f"/home/dnori/rnadock/output/visualizations/heatmap_example_new{idx}.png", dpi=1200)
 
 def get_contiguous_predicted_sites(sequence, pred_lst):
     pred_arr = np.where(np.array(pred)>0.19, 1, 0)
@@ -88,7 +90,7 @@ def plot_histogram(data):
     plt.savefig("visualizations/kmer_hist_val_pred_3.png", dpi=1200)
 
 if __name__ == "__main__":
-    df = pd.read_csv("charts_rna_binary_noligand_fullrun/visualization_pred_info.csv")
+    df = pd.read_csv("/home/dnori/rnadock/output/geobind_comparison/visualization_pred_info.csv")
 
     contiguous_predicted_seqs = []
     protein_identity = []
@@ -98,13 +100,14 @@ if __name__ == "__main__":
         pred = ast.literal_eval(pred)
         true = ast.literal_eval(true)
         
-        # visualize_match(seq, pred, true, i)
-        # if i == 17:
-        #     break
+        visualize_match(seq, pred, true, i)
 
-        contiguous_predicted_seqs.extend(get_contiguous_predicted_sites(seq, pred))
-        protein_identity.extend(len(contiguous_predicted_seqs) * [i])
+        if i == 8:
+            break
+
+        # contiguous_predicted_seqs.extend(get_contiguous_predicted_sites(seq, pred))
+        # protein_identity.extend(len(contiguous_predicted_seqs) * [i])
     
-    kmers, prot_labels = generate_substrings(contiguous_predicted_seqs, protein_identity)
-    kmer_dict, represented_prots, words = most_frequent_words(kmers, 200, prot_labels)
-    plot_histogram(kmer_dict)
+    # kmers, prot_labels = generate_substrings(contiguous_predicted_seqs, protein_identity)
+    # kmer_dict, represented_prots, words = most_frequent_words(kmers, 200, prot_labels)
+    # plot_histogram(kmer_dict)

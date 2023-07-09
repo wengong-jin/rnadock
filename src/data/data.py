@@ -40,6 +40,12 @@ class ProteinDataset():
         for entry in tqdm.tqdm(self.raw_data, desc = 'prep raw data'):
             if type(entry['target_coords']) != torch.Tensor:
                 entry['target_coords'] = torch.from_numpy(entry['target_coords']).float()
+            if type(entry['res_ids']) != torch.Tensor:
+                entry['res_ids'] = torch.from_numpy(entry['res_ids'])
+            if type(entry['atom_binary_mask']) != torch.Tensor:
+                entry['atom_binary_mask'] = torch.tensor(entry['atom_binary_mask'])
+            if type(entry['residue_binary_mask']) != torch.Tensor:
+                entry['residue_binary_mask'] = torch.tensor(entry['residue_binary_mask'])
             if 'ligand_coords' in self.raw_data[0].keys() and type(entry['ligand_coords']) != torch.Tensor:
                 entry['ligand_coords'] = torch.from_numpy(entry['ligand_coords']).float()
             if 'binary_mask' in self.raw_data[0].keys() and type(entry['binary_mask']) != torch.Tensor:
@@ -121,30 +127,40 @@ class ProteinDataset():
         self.max_rna_length = max([len(seq) for seq in train_ligand_seqs+test_ligand_seqs])
 
     def prep_geobind_data(self, split="Train"):
-        self.data[split] = {"Protein":{}, "Ligand":{}}
+        self.data[split] = {"Protein":{}, "Ligand":{},"Binary_Masks":{}}
         target_coords = []
         target_seqs = []
         ligand_coords = []
         ligand_seqs = []
-        masks = []
+        residue_masks = []
+        atom_masks = []
         pdbs = []
+        res_ids = []
+        # atom_loss_masks = []
 
         for entry in tqdm.tqdm(self.raw_data, desc = f'prep geobind {split}'):
             target_coords.append(entry['target_coords'])
             target_seqs.append(entry['target_seq'])
             ligand_coords.append(entry['ligand_coords'])
             ligand_seqs.append(entry['ligand_seq'])
-            masks.append(entry['binary_mask'])
+            atom_masks.append(entry['atom_binary_mask'])
+            residue_masks.append(entry['residue_binary_mask'])
             pdbs.append(entry['pdb'])
+            res_ids.append(entry['res_ids'])
+            # atom_loss_masks.append(entry['atom_loss_mask'])
 
         self.data[split]["Protein"]["Coords"] = target_coords
         self.data[split]["Protein"]["Seqs"] = target_seqs
+        self.data[split]["Protein"]["Res_Ids"] = res_ids
         self.data[split]["Ligand"]["Coords"] = ligand_coords
         self.data[split]["Ligand"]["Seqs"] = ligand_seqs
-        self.data[split]["Binary_Masks"] = masks
+        self.data[split]["Binary_Masks"]["Residue"] = residue_masks
+        self.data[split]["Binary_Masks"]["Atom"] = atom_masks
         self.data[split]["PDB"] = pdbs
-        self.max_protein_length = max([len(seq) for seq in target_seqs])
-        self.max_rna_length = max([len(seq) for seq in ligand_seqs])
+        # self.data[split]["Atom_Loss_Masks"] = atom_loss_masks
+
+        self.max_protein_length = max([coord.shape[0] for coord in target_coords])
+        self.max_rna_length = max([coord.shape[0] for coord in ligand_coords])
 
     def split_train_into_folds(self, k):
         
@@ -275,13 +291,16 @@ class ProteinBinaryDataset(ProteinDataset):
 
     def prep_for_non_pairwise_model(self, split):
         protein_X = torch.zeros(len(self.data[split]["Protein"]["Coords"]), self.max_protein_length, 3)
-        binary_y = torch.zeros(len(self.data[split]["Binary_Masks"]), self.max_protein_length, 1)
+        binary_y_atom = torch.zeros(len(self.data[split]["Binary_Masks"]["Atom"]), self.max_protein_length, 1)
+        binary_y_residue = torch.zeros(len(self.data[split]["Binary_Masks"]["Residue"]), self.max_protein_length//3, 1)
         for i in range(len(self.data[split]["Protein"]["Coords"])):
             prot_len = len(self.data[split]["Protein"]["Coords"][i])
             protein_X[i, :prot_len, :] = self.data[split]["Protein"]["Coords"][i]
-            binary_y[i, :prot_len, 0] = self.data[split]["Binary_Masks"][i]
+            binary_y_atom[i, :prot_len, 0] = self.data[split]["Binary_Masks"]["Atom"][i]
+            binary_y_residue[i, :prot_len//3, 0] = self.data[split]["Binary_Masks"]["Residue"][i]
         self.data[split]["Protein"]["Coords"] = protein_X
-        self.data[split]["Binary_Masks"] = binary_y
+        self.data[split]["Binary_Masks"]["Residue"] = binary_y_residue
+        self.data[split]["Binary_Masks"]["Atom"] = binary_y_atom
 
     def get_batch(self, idx, batch_size, split):
         data = self.data[split]
@@ -290,14 +309,18 @@ class ProteinBinaryDataset(ProteinDataset):
             prot_X = data["Protein"]["Coords"][idx:idx+batch_size]
             prot_seqs = data["Protein"]["Seqs"][idx:idx+batch_size]
             pdb = data["PDB"][idx:idx+batch_size]
-            binary_y = data["Binary_Masks"][idx:idx+batch_size]
+            binary_y_atom = data["Binary_Masks"]["Atom"][idx:idx+batch_size]
+            binary_y_residue = data["Binary_Masks"]["Residue"][idx:idx+batch_size]
+            res_ids = data["Protein"]["Res_Ids"][idx:idx+batch_size]
         else:
             prot_X = data["Protein"]["Coords"][idx:]
             prot_seqs = data["Protein"]["Seqs"][idx:]
             pdb = data["PDB"][idx:]
-            binary_y = data["Binary_Masks"][idx:]
+            binary_y_atom = data["Binary_Masks"]["Atom"][idx:]
+            binary_y_residue = data["Binary_Masks"]["Residue"][idx:]
+            res_ids = data["Protein"]["Res_Ids"][idx:]
 
-        return prot_X, prot_seqs, pdb, binary_y
+        return prot_X, prot_seqs, pdb, binary_y_residue, binary_y_atom, res_ids
 
 class ProteinMulticlassDataset(ProteinDataset):
     def __init__(self, path_to_pickle):

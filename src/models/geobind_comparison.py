@@ -31,13 +31,13 @@ from frame import ClassificationModel, FAEncoder, FrameAveraging
 sys.path.append("/home/dnori/rnadock/src/data")
 from data import ProteinDataset, ProteinBinaryDataset, ProteinMulticlassDataset
 
-def step(model, prot_coords, prot_seqs, pdb, y, esm_repr=None):
+def step(model, prot_coords, prot_seqs, pdb, y_residue, y_atom, res_ids, esm_repr=None):
     # train_dataset.max_protein_length = test_dataset.max_protein_length (same for rna length)
     if esm_repr is not None:
         token_repr = esm_repr[pdb[0]]
     else:
         token_repr = None
-    loss, y_hat, y_batch, mask = model(prot_coords, None, prot_seqs, None, y, train_dataset.max_protein_length, train_dataset.max_rna_length, token_repr)
+    loss, y_hat, y_batch, y_hat_atom, mask = model(prot_coords, None, prot_seqs, None, y_residue, res_ids, train_dataset.max_protein_length, train_dataset.max_rna_length, token_repr)
     y_batch = y_batch[mask.bool()].cpu().detach().numpy()
     y_hat = torch.sigmoid(y_hat)
     y_hat = y_hat[mask.bool()].cpu().detach().numpy()
@@ -46,13 +46,13 @@ def step(model, prot_coords, prot_seqs, pdb, y, esm_repr=None):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument('--esm_emb_size', type=int, default=1280)
-    parser.add_argument('--encoder_hidden_size', type=int, default=400)
+    parser.add_argument('--encoder_hidden_size', type=int, default=200)
     parser.add_argument('--mlp_hidden_size', type=int, default=200)
     parser.add_argument('--depth', type=int, default=2)
     parser.add_argument('--mlp_output_dim', type=int, default=1)
     parser.add_argument('--dropout', type=float, default=0.1)
     parser.add_argument('--lr', type=float, default=1e-3)
-    parser.add_argument('--epochs', type=int, default=10)
+    parser.add_argument('--epochs', type=int, default=25)
     parser.add_argument('--seed', type=int, default=7)
     parser.add_argument('--anneal_rate', type=float, default=0.95)
     parser.add_argument('--batch_size', type=int, default=1)
@@ -64,8 +64,8 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     torch.manual_seed(args.seed)
-    train_pkl_path = f"./src/data/geobind_train_rna.pickle"
-    test_pkl_path = f"./src/data/geobind_test_rna.pickle"
+    train_pkl_path = f"./src/data/geobind_train_rna_fullbackbone.pickle"
+    test_pkl_path = f"./src/data/geobind_test_rna_fullbackbone.pickle"
 
     train_dataset = ProteinBinaryDataset(train_pkl_path)
     train_dataset.prep_raw_data()
@@ -103,10 +103,6 @@ if __name__ == "__main__":
     esm_repr = pickle.load(file)
     file.close() 
 
-    print(torch.sum(train_dataset.data["Train"]["Binary_Masks"]))
-    print(train_dataset.data["Train"]["Protein"]["Coords"].shape)
-    exit()
-
     for e in range(args.epochs):
         model.train()
         true_vals = []
@@ -137,10 +133,11 @@ if __name__ == "__main__":
             'loss': loss,
             }, filename)
 
-    checkpoint = torch.load("/home/dnori/rnadock/output/model_checkpoints/geobind_comparison/epoch_8.pt")
+
+    checkpoint = torch.load(f"/home/dnori/rnadock/output/model_checkpoints/geobind_comparison/epoch_24.pt")
     model.load_state_dict(checkpoint['model_state_dict'])
     model.to("cpu")
- 
+
     # hold out test set
     true_vals_test = []
     pred_vals_test = []
@@ -158,11 +155,18 @@ if __name__ == "__main__":
         y_batch, y_hat, loss, prot_seq_batch, pdb_batch = step(model, *test_dataset.get_batch(i, args.batch_size, "Test"), esm_repr)
         true_vals_test.extend(y_batch.tolist())
         pred_vals_test.extend(y_hat.tolist())
-        predictions.append(y_hat.tolist())
-        ground_truth.append(y_batch.tolist())
+        predictions.append(y_batch.tolist())
+        ground_truth.append(y_hat.tolist())
         sequences.append(prot_seq_batch[0])
+
+    data = {'sequences': sequences,
+         'predictions': predictions,
+         'ground_truth': ground_truth}
+
+    df = pd.DataFrame.from_dict(data)
+    df.to_csv('output/geobind_comparison/visualization_pred_info.csv')
 
     scores_df = pd.DataFrame({'label':true_vals_test,'score':pred_vals_test})
     model.blm.add_model(f'test', scores_df)
-    model.blm.plot_roc(model_names=['test'],params={"save":True,"prefix":f"output/geobind_comparison/test_9th_epoch_"})
-    model.blm.plot(model_names=['test'],chart_types=[1,2,3,4,5],params={"save":True,"prefix":f"output/geobind_comparison/test_9th_epoch_"})
+    model.blm.plot_roc(model_names=['test'],params={"save":True,"prefix":f"output/geobind_comparison/test_25th_epoch_"})
+    model.blm.plot(model_names=['test'],chart_types=[1,2,3,4,5],params={"save":True,"prefix":f"output/geobind_comparison/test_25th_epoch_"})

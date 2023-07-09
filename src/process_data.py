@@ -182,18 +182,18 @@ def create_geobind_datapoint(line):
         bound_res_ids = [int(s[1:]) for s in bound_res_ids.split(" ")]
 
         full_target_coords = chain_1.coord
-        target_coords = chain_1[chain_1.atom_name == 'CA'].coord # operating just on backbone carbon
-        res_ids = chain_1[chain_1.atom_name == 'CA'].res_id
-        target_seq = chain_1[chain_1.atom_name == 'CA'].res_name
+        target_coords = chain_1[biotite.structure.filter_backbone(chain_1)].coord # all backbone coordinates
+        # target_coords = chain_1[chain_1.atom_name == 'CA'].coord # alpha carbons
+        # target_coords = chain_1.coord # full atom
+        res_ids = chain_1[biotite.structure.filter_backbone(chain_1)].res_id # all backbone coordinates
+        # res_ids = chain_1[chain_1.atom_name == 'CA'].res_id # alpha carbons
+        # res_ids = chain_1.res_id # full atom
+        target_seq = chain_1[biotite.structure.filter_backbone(chain_1)].res_name # all backbone coordinates
+        # target_seq = chain_1[chain_1.atom_name == 'CA'].res_name # alpha carbons
+        # target_seq = chain_1.res_name # full atom
         rna_coords = chain_2[chain_2.atom_name == "C3\'"].coord
         rna_seq = chain_2[chain_2.atom_name == "C3\'"].res_name
         name = f"{pdb_id}_{protein_chain}_{lc}"
-
-        # compute binary mask
-        mask = [0 for i in range(len(target_coords))]
-        for j in range(len(target_coords)):
-            if res_ids[j] in bound_res_ids:
-                mask[j] = 1
 
         # modify target/rna sequences (remove nonstandard amino acids/nucleotides)
         clean_target_seq = []
@@ -202,6 +202,14 @@ def create_geobind_datapoint(line):
                 clean_target_seq.append(protein_letters_3to1[three_letter_code])
             else:
                 clean_target_seq.append('X') #nonstandard amino acid
+
+        # compute binary mask
+        atom_mask = [0 for i in range(len(target_coords))]
+        residue_mask = [0 for i in range(len(target_coords)//3)]
+        for j in range(len(target_coords)):
+            if res_ids[j] in bound_res_ids:
+                atom_mask[j] = 1
+                residue_mask[j//3] = 1
         
         clean_rna_seq = []
         for nucleotide in rna_seq:
@@ -210,7 +218,7 @@ def create_geobind_datapoint(line):
             else:
                 clean_rna_seq.append('Z') #nonstandard nucleotide
 
-        dps.append({'pdb': name, 'target_coords': target_coords, 'ligand_seq': ''.join(clean_rna_seq), 'ligand_coords': rna_coords, 'target_seq': ''.join(clean_target_seq), 'binary_mask': mask})
+        dps.append({'pdb': name, 'target_coords': target_coords, 'ligand_seq': ''.join(clean_rna_seq), 'ligand_coords': rna_coords, 'target_seq': ''.join(clean_target_seq), 'residue_binary_mask': residue_mask, 'atom_binary_mask': atom_mask, 'res_ids': np.array(res_ids)})
 
     return dps        
 
@@ -299,5 +307,5 @@ if __name__ == "__main__":
     datapoints = []
     for line in tqdm.tqdm(lines):
         datapoints.extend(create_geobind_datapoint(line))
-    with open('src/data/geobind_train_rna.pickle', 'wb') as handle:
+    with open('src/data/geobind_train_rna_fullbackbone.pickle', 'wb') as handle:
         pickle.dump(datapoints, handle)

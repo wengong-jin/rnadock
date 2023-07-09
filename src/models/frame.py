@@ -56,12 +56,12 @@ class FAEClassificationModel(nn.Module):
         
         esm_input = []
         pad_mask_atom = torch.from_numpy(np.ones((prot_X.shape[0],max_prot_seq_len)))
-        pad_mask_residue = torch.from_numpy(np.ones((prot_X.shape[0],max_prot_seq_len//3)))
+        pad_mask_residue = torch.from_numpy(np.ones((prot_X.shape[0],max_prot_seq_len)))
         # pad_mask = torch.from_numpy(np.zeros((prot_X.shape[0],max_prot_seq_len)))
         for s in range(len(seqs)):
             sequence = seqs[s] + "<pad>"*(max_prot_seq_len - len(seqs[s]))
             pad_mask_atom[s,len(seqs[s]):] = 0
-            pad_mask_residue[s, len(seqs[s])//3:] = 0
+            pad_mask_residue[s, len(seqs[s]):] = 0
             # pad_mask[s, :atom_loss_masks[0].shape[0]] = atom_loss_masks[0]
             esm_input.append((f"protein_{s}",sequence))
         batch_labels, batch_strs, batch_tokens = self.batch_converter(esm_input)
@@ -97,7 +97,7 @@ class FAEClassificationModel(nn.Module):
                         token_repr_ligand[i,:,:] = results_ligand["representations"][33][:,1:-1,:]
 
         self.protein_encoder.cuda()
-        h_prot = self.protein_encoder(prot_X.cuda(), h_S=None, unique_residues=res_ids, mask=pad_mask_atom.cuda()) # h_prot: (batch sz, max prot seq len, encoder hidden dim) h_S = token_repr
+        h_prot = self.protein_encoder(prot_X.cuda(), h_S=token_repr, unique_residues=res_ids, mask=pad_mask_atom.cuda()) # h_prot: (batch sz, max prot seq len, encoder hidden dim)
         if ligand_X:
             full_mask = torch.unsqueeze(torch.mm(pad_mask.T, pad_mask_ligand).flatten(), dim=0)
 
@@ -141,15 +141,15 @@ class FAEClassificationModel(nn.Module):
                 label = torch.from_numpy(label)
         
         self.linear_layers.cuda()
-        atom_pred = self.linear_layers(h.float()).squeeze()
-        res_pred = atom_pred.view(-1, 3)
-        pred = res_pred.sum(dim=1)
+        pred = self.linear_layers(h.float()).squeeze()
+        # res_pred = atom_pred.view(-1, 3)
+        # pred = res_pred.sum(dim=1)
         if self.args.classification_type == "binary":
             loss = F.binary_cross_entropy_with_logits(pred, label.cuda(), reduction = 'none')
         elif self.args.classification_type == "multiclass":
             loss = F.cross_entropy(pred, label.cuda().type(torch.int64), reduction = 'none')
         loss = (loss * mask.cuda()).sum() / mask.sum() #masking out padded residues
-        return loss, pred, label, atom_pred, mask
+        return loss, pred, label, mask
 
 class FrameAveraging(nn.Module):
 
@@ -182,7 +182,7 @@ class FAEncoder(FrameAveraging):
         super(FAEncoder, self).__init__()
         if mol_type == "protein":
             self.encoder = SRUpp(
-                    3, #args.esm_emb_size + 3
+                    args.esm_emb_size + 3,
                     args.encoder_hidden_size // 2,
                     args.encoder_hidden_size // 2,
                     num_layers=args.depth,
@@ -219,9 +219,9 @@ class FAEncoder(FrameAveraging):
 
         # h_X = h_X.repeat(1,1,20)
 
-        if unique_residues is not None and h_S is not None:
-            counts = torch.tensor([3 for i in range(h_S.shape[1])])
-            h_S = torch.repeat_interleave(h_S, counts, dim=1)
+        # if unique_residues is not None and h_S is not None:
+        #     counts = torch.tensor([3 for i in range(h_S.shape[1])])
+        #     h_S = torch.repeat_interleave(h_S, counts, dim=1)
 
         if h_S is not None:
             h_S = h_S.unsqueeze(1).expand(-1, 8, -1, -1).reshape(B*8, N, -1)

@@ -292,12 +292,14 @@ class ProteinBinaryDataset(ProteinDataset):
     def prep_for_non_pairwise_model(self, split):
         protein_X = torch.zeros(len(self.data[split]["Protein"]["Coords"]), self.max_protein_length, 3)
         binary_y_atom = torch.zeros(len(self.data[split]["Binary_Masks"]["Atom"]), self.max_protein_length, 1)
-        binary_y_residue = torch.zeros(len(self.data[split]["Binary_Masks"]["Residue"]), self.max_protein_length//3, 1)
+        # binary_y_residue = torch.zeros(len(self.data[split]["Binary_Masks"]["Residue"]), self.max_protein_length//3, 1)
+        binary_y_residue = torch.zeros(len(self.data[split]["Binary_Masks"]["Residue"]), self.max_protein_length, 1)
         for i in range(len(self.data[split]["Protein"]["Coords"])):
             prot_len = len(self.data[split]["Protein"]["Coords"][i])
             protein_X[i, :prot_len, :] = self.data[split]["Protein"]["Coords"][i]
             binary_y_atom[i, :prot_len, 0] = self.data[split]["Binary_Masks"]["Atom"][i]
-            binary_y_residue[i, :prot_len//3, 0] = self.data[split]["Binary_Masks"]["Residue"][i]
+            # binary_y_residue[i, :prot_len//3, 0] = self.data[split]["Binary_Masks"]["Residue"][i]
+            binary_y_residue[i, :prot_len, 0] = self.data[split]["Binary_Masks"]["Residue"][i]
         self.data[split]["Protein"]["Coords"] = protein_X
         self.data[split]["Binary_Masks"]["Residue"] = binary_y_residue
         self.data[split]["Binary_Masks"]["Atom"] = binary_y_atom

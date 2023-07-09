@@ -56,12 +56,12 @@ class IPAClassificationModel(nn.Module):
         
         esm_input = []
         pad_mask_atom = torch.from_numpy(np.ones((prot_X.shape[0],max_prot_seq_len)))
-        pad_mask_residue = torch.from_numpy(np.ones((prot_X.shape[0],max_prot_seq_len//3)))
+        pad_mask_residue = torch.from_numpy(np.ones((prot_X.shape[0],max_prot_seq_len)))
         # pad_mask = torch.from_numpy(np.zeros((prot_X.shape[0],max_prot_seq_len)))
         for s in range(len(seqs)):
             sequence = seqs[s] + "<pad>"*(max_prot_seq_len - len(seqs[s]))
             pad_mask_atom[s,len(seqs[s]):] = 0
-            pad_mask_residue[s, len(seqs[s])//3:] = 0
+            pad_mask_residue[s, len(seqs[s]):] = 0
             # pad_mask[s, :atom_loss_masks[0].shape[0]] = atom_loss_masks[0]
             esm_input.append((f"protein_{s}",sequence))
         batch_labels, batch_strs, batch_tokens = self.batch_converter(esm_input)
@@ -86,13 +86,13 @@ class IPAClassificationModel(nn.Module):
         label = y_batch.squeeze()
         
         self.linear_layers.cuda()
-        atom_pred = self.linear_layers(h).squeeze()
-        res_pred = atom_pred.view(-1, 3)
-        pred = res_pred.sum(dim=1)
+        pred = self.linear_layers(h).squeeze()
+        # res_pred = atom_pred.view(-1, 3)
+        # pred = res_pred.sum(dim=1)
         mask = pad_mask_residue.T.squeeze()
         if self.args.classification_type == "binary":
             loss = F.binary_cross_entropy_with_logits(pred, label.cuda(), reduction = 'none')
         elif self.args.classification_type == "multiclass":
             loss = F.cross_entropy(pred, label.cuda().type(torch.int64), reduction = 'none')
         loss = (loss * mask.cuda()).sum() / mask.sum() #masking out padded residues
-        return loss, pred, label, atom_pred, mask
+        return loss, pred, label, mask

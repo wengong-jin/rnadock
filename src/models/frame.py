@@ -23,10 +23,10 @@ from binary_label_metrics import BinaryLabelMetrics
 sys.path.append("/home/dnori/rnadock/src/data")
 from data import ProteinDataset, ProteinBinaryDataset, ProteinMulticlassDataset
 
-class ClassificationModel(nn.Module):
+class FAEClassificationModel(nn.Module):
 
     def __init__(self, args):
-        super(ClassificationModel, self).__init__()
+        super(FAEClassificationModel, self).__init__()
         self.blm = BinaryLabelMetrics()
         self.protein_encoder = FAEncoder(args, "protein")
         if args.ligand_structure:

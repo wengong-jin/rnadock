@@ -53,7 +53,7 @@ if __name__ == "__main__":
     parser.add_argument('--mlp_output_dim', type=int, default=1)
     parser.add_argument('--dropout', type=float, default=0.1)
     parser.add_argument('--lr', type=float, default=1e-3)
-    parser.add_argument('--epochs', type=int, default=25)
+    parser.add_argument('--epochs', type=int, default=10)
     parser.add_argument('--seed', type=int, default=7)
     parser.add_argument('--anneal_rate', type=float, default=0.95)
     parser.add_argument('--batch_size', type=int, default=1)
@@ -65,8 +65,8 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     torch.manual_seed(args.seed)
-    train_pkl_path = f"./src/data/geobind_train_rna_fullbackbone.pickle"
-    test_pkl_path = f"./src/data/geobind_test_rna_fullbackbone.pickle"
+    train_pkl_path = f"./src/data/graphbind_train_rna_fullbackbone.pickle"
+    test_pkl_path = f"./src/data/graphbind_test_rna_fullbackbone.pickle"
 
     train_dataset = ProteinBinaryDataset(train_pkl_path)
     train_dataset.prep_raw_data()
@@ -91,7 +91,7 @@ if __name__ == "__main__":
     num_train_points = len(train_dataset.data["Train"]["Protein"]["Seqs"])
     num_test_points = len(test_dataset.data["Test"]["Protein"]["Seqs"])
 
-    model = IPAClassificationModel(args)
+    model = FAEClassificationModel(args)
     optimizer = torch.optim.Adam(model.parameters(), lr=args.lr)
     scheduler = lr_scheduler.ExponentialLR(optimizer, args.anneal_rate)
 
@@ -135,9 +135,8 @@ if __name__ == "__main__":
             }, filename)
 
 
-    checkpoint = torch.load(f"/home/dnori/rnadock/output/model_checkpoints/geobind_comparison/epoch_24.pt")
+    checkpoint = torch.load(f"/home/dnori/rnadock/output/model_checkpoints/geobind_comparison/epoch_9.pt")
     model.load_state_dict(checkpoint['model_state_dict'])
-    model.to("cpu")
 
     # hold out test set
     true_vals_test = []
@@ -169,5 +168,5 @@ if __name__ == "__main__":
 
     scores_df = pd.DataFrame({'label':true_vals_test,'score':pred_vals_test})
     model.blm.add_model(f'test', scores_df)
-    model.blm.plot_roc(model_names=['test'],params={"save":True,"prefix":f"output/geobind_comparison/test_25th_epoch_"})
-    model.blm.plot(model_names=['test'],chart_types=[1,2,3,4,5],params={"save":True,"prefix":f"output/geobind_comparison/test_25th_epoch_"})
+    model.blm.plot_roc(model_names=['test'],params={"save":True,"prefix":f"output/geobind_comparison/test_10th_epoch_"})
+    model.blm.plot(model_names=['test'],chart_types=[1,2,3,4,5],params={"save":True,"prefix":f"output/geobind_comparison/test_10th_epoch_"})

@@ -174,6 +174,8 @@ def create_geobind_datapoint(line):
         chain_1 = structure[structure.chain_id == protein_chain]
         chain_2 = structure[structure.chain_id == lc]
 
+        lc = lc[:-1]
+        
         bound_res_ids = " ".join(line[line.index(f"{protein_chain}_{lc}"):].split(" ")[1:])
         if ":" in bound_res_ids:
             bound_res_ids = bound_res_ids[:bound_res_ids.index(":")]
@@ -206,10 +208,14 @@ def create_geobind_datapoint(line):
         # compute binary mask
         atom_mask = [0 for i in range(len(target_coords))]
         residue_mask = [0 for i in range(len(target_coords)//3)]
-        for j in range(len(target_coords)):
-            if res_ids[j] in bound_res_ids:
-                atom_mask[j] = 1
-                residue_mask[j//3] = 1
+        try:
+            for j in range(len(target_coords)):
+                if res_ids[j] in bound_res_ids:
+                    atom_mask[j] = 1
+                    residue_mask[j//3] = 1
+        except:
+            print(pdb_id)
+            return []
         
         clean_rna_seq = []
         for nucleotide in rna_seq:
@@ -302,10 +308,10 @@ if __name__ == "__main__":
     # with open('src/data/dataset_rna_2.pickle', 'wb') as handle:
     #     pickle.dump(list(dataset.values()), handle)
 
-    file1 = open("/home/dnori/rnadock/GeoBind/Dataset_lists/GeoBind/RNA-663_Train.txt", "r")
+    file1 = open("/home/dnori/rnadock/GeoBind/Dataset_lists/GraphBind/RNA-117_Test.txt", "r")
     lines = file1.readlines()
     datapoints = []
     for line in tqdm.tqdm(lines):
         datapoints.extend(create_geobind_datapoint(line))
-    with open('src/data/geobind_train_rna_fullbackbone.pickle', 'wb') as handle:
+    with open('src/data/graphbind_test_rna_fullbackbone.pickle', 'wb') as handle:
         pickle.dump(datapoints, handle)

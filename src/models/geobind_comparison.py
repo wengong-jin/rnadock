@@ -27,6 +27,7 @@ import torch.optim.lr_scheduler as lr_scheduler
 from tqdm import tqdm
 from binary_label_metrics import BinaryLabelMetrics
 from frame import FAEClassificationModel, FAEncoder, FrameAveraging
+from ipa import IPAClassificationModel
 
 sys.path.append("/home/dnori/rnadock/src/data")
 from data import ProteinDataset, ProteinBinaryDataset, ProteinMulticlassDataset
@@ -90,7 +91,7 @@ if __name__ == "__main__":
     num_train_points = len(train_dataset.data["Train"]["Protein"]["Seqs"])
     num_test_points = len(test_dataset.data["Test"]["Protein"]["Seqs"])
 
-    model = FAEClassificationModel(args)
+    model = IPAClassificationModel(args)
     optimizer = torch.optim.Adam(model.parameters(), lr=args.lr)
     scheduler = lr_scheduler.ExponentialLR(optimizer, args.anneal_rate)
 

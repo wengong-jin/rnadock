@@ -32,20 +32,20 @@ class IPAClassificationModel(nn.Module):
         self.blm = BinaryLabelMetrics()
         self.protein_encoder = InvariantPointAttention(
             dim = args.esm_emb_size + 3,   # single representation dimension
-            heads = 6,                       # number of attention heads
+            heads = 3,                       # number of attention heads
             require_pairwise_repr = False # no pairwise representations
-        ).cuda().half()
+        ).cuda().float()
         self.linear_layers = nn.Sequential(
-                nn.Linear(args.esm_emb_size + 3, args.mlp_hidden_size),
+                nn.Linear(args.esm_emb_size + 3, 1000),
                 nn.ReLU(),
-                nn.Linear(args.mlp_hidden_size, args.mlp_hidden_size),
+                nn.Linear(1000, 500),
                 nn.ReLU(),
-                nn.Linear(args.mlp_hidden_size, args.mlp_hidden_size),
+                nn.Linear(500, args.mlp_hidden_size),
                 nn.ReLU(),
                 nn.Linear(args.mlp_hidden_size, args.mlp_hidden_size),
                 nn.ReLU(),
                 nn.Linear(args.mlp_hidden_size, args.mlp_output_dim),
-        ).cuda().half()
+        ).cuda().float()
 
         self.esm_model, self.esm_alphabet = torch.hub.load("facebookresearch/esm:main", "esm2_t33_650M_UR50D")
         self.batch_converter = self.esm_alphabet.get_batch_converter()
@@ -78,10 +78,10 @@ class IPAClassificationModel(nn.Module):
             counts = torch.tensor([3 for i in range(token_repr.shape[1])])
             token_repr = torch.repeat_interleave(token_repr, counts, dim=1)
 
-        rotations     = repeat(torch.eye(3), '... -> b n ...', b = 1, n = max_prot_seq_len).half()
-        translations  = torch.randn(1, max_prot_seq_len, 3).half()
+        rotations     = repeat(torch.eye(3), '... -> b n ...', b = 1, n = max_prot_seq_len).float()
+        translations  = torch.randn(1, max_prot_seq_len, 3).float()
 
-        prot_input = torch.cat([prot_X, token_repr], dim=-1).cuda().half()
+        prot_input = torch.cat([prot_X, token_repr], dim=-1).cuda().float()
         h = self.protein_encoder(prot_input, rotations=rotations.cuda(), translations=translations.cuda(), mask=pad_mask_atom.cuda().bool())
         label = y_batch.squeeze()
         

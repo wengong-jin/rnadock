@@ -53,7 +53,7 @@ if __name__ == "__main__":
     parser.add_argument('--mlp_output_dim', type=int, default=1)
     parser.add_argument('--dropout', type=float, default=0.1)
     parser.add_argument('--lr', type=float, default=1e-3)
-    parser.add_argument('--epochs', type=int, default=25)
+    parser.add_argument('--epochs', type=int, default=10)
     parser.add_argument('--seed', type=int, default=7)
     parser.add_argument('--anneal_rate', type=float, default=0.95)
     parser.add_argument('--batch_size', type=int, default=1)
@@ -95,49 +95,46 @@ if __name__ == "__main__":
     optimizer = torch.optim.Adam(model.parameters(), lr=args.lr)
     scheduler = lr_scheduler.ExponentialLR(optimizer, args.anneal_rate)
 
-    # sequences = []
-    # predictions = []
-    # ground_truth = []
-    # pdbs = []
+    sequences = []
+    predictions = []
+    ground_truth = []
+    pdbs = []
 
-    # file = open('src/data/graphbind_train_esm_embeddings.pickle', 'rb')
-    # esm_repr = pickle.load(file)
-    # file.close() 
+    file = open('src/data/graphbind_train_esm_embeddings.pickle', 'rb')
+    esm_repr = pickle.load(file)
+    file.close() 
 
-    # checkpoint = torch.load(f"/home/dnori/rnadock/output/model_checkpoints/graphbind_comparison/epoch_9.pt")
-    # model.load_state_dict(checkpoint['model_state_dict'])
+    for e in range(args.epochs):
+        model.train()
+        true_vals = []
+        pred_vals = []
+        for i in tqdm(range(0, num_train_points, args.batch_size)):
+            y_batch, y_hat, loss, prot_seq_batch, pdb_batch = step(model, *train_dataset.get_batch(i, args.batch_size, "Train"), esm_repr=esm_repr)
+            true_vals.extend(y_batch.tolist())
+            pred_vals.extend(y_hat.tolist())
 
-    # for e in range(10, args.epochs):
-    #     model.train()
-    #     true_vals = []
-    #     pred_vals = []
-    #     for i in tqdm(range(0, num_train_points, args.batch_size)):
-    #         y_batch, y_hat, loss, prot_seq_batch, pdb_batch = step(model, *train_dataset.get_batch(i, args.batch_size, "Train"), esm_repr=esm_repr)
-    #         true_vals.extend(y_batch.tolist())
-    #         pred_vals.extend(y_hat.tolist())
+            predictions.append(y_hat.tolist())
+            ground_truth.append(y_batch.tolist())
+            sequences.append(prot_seq_batch[0])
+            pdbs.append(pdb_batch[0])
 
-    #         predictions.append(y_hat.tolist())
-    #         ground_truth.append(y_batch.tolist())
-    #         sequences.append(prot_seq_batch[0])
-    #         pdbs.append(pdb_batch[0])
+            loss.backward()
+            nn.utils.clip_grad_norm_(model.parameters(), args.clip_norm)
+            optimizer.step()
 
-    #         loss.backward()
-    #         nn.utils.clip_grad_norm_(model.parameters(), args.clip_norm)
-    #         optimizer.step()
+        scores_df = pd.DataFrame({'label':true_vals,'score':pred_vals})
+        model.blm.add_model(f'epoch_{e}', scores_df)
+        model.blm.plot_roc(model_names=[f'epoch_{e}'],params={"save":True,"prefix":f"output/graphbind_comparison/epoch_{e}_"})
 
-    #     scores_df = pd.DataFrame({'label':true_vals,'score':pred_vals})
-    #     model.blm.add_model(f'epoch_{e}', scores_df)
-    #     model.blm.plot_roc(model_names=[f'epoch_{e}'],params={"save":True,"prefix":f"output/graphbind_comparison/epoch_{e}_"})
+        filename = f'output/model_checkpoints/graphbind_comparison/epoch_{e}.pt'
+        torch.save({
+            'epoch': e,
+            'model_state_dict': model.state_dict(),
+            'optimizer_state_dict': optimizer.state_dict(),
+            'loss': loss,
+            }, filename)
 
-    #     filename = f'output/model_checkpoints/graphbind_comparison/epoch_{e}.pt'
-    #     torch.save({
-    #         'epoch': e,
-    #         'model_state_dict': model.state_dict(),
-    #         'optimizer_state_dict': optimizer.state_dict(),
-    #         'loss': loss,
-    #         }, filename)
-
-    checkpoint = torch.load(f"/home/dnori/rnadock/output/model_checkpoints/graphbind_comparison/epoch_24.pt")
+    checkpoint = torch.load(f"/home/dnori/rnadock/output/model_checkpoints/graphbind_comparison/epoch_9.pt")
     model.load_state_dict(checkpoint['model_state_dict'])
 
     # hold out test set
@@ -170,5 +167,5 @@ if __name__ == "__main__":
 
     scores_df = pd.DataFrame({'label':true_vals_test,'score':pred_vals_test})
     model.blm.add_model(f'test', scores_df)
-    model.blm.plot_roc(model_names=['test'],params={"save":True,"prefix":f"output/graphbind_comparison/test_25th_epoch_"})
-    model.blm.plot(model_names=['test'],chart_types=[1,2,3,4,5],params={"save":True,"prefix":f"output/graphbind_comparison/test_25th_epoch_"})
+    model.blm.plot_roc(model_names=['test'],params={"save":True,"prefix":f"output/graphbind_comparison/test_10th_epoch_"})
+    model.blm.plot(model_names=['test'],chart_types=[1,2,3,4,5],params={"save":True,"prefix":f"output/graphbind_comparison/test_10th_epoch_"})

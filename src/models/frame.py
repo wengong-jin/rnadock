@@ -182,7 +182,7 @@ class FAEncoder(FrameAveraging):
         super(FAEncoder, self).__init__()
         if mol_type == "protein":
             self.encoder = SRUpp(
-                    args.esm_emb_size + 3,
+                    args.esm_emb_size + 3*15,
                     args.encoder_hidden_size // 2,
                     args.encoder_hidden_size // 2,
                     num_layers=args.depth,
@@ -217,7 +217,7 @@ class FAEncoder(FrameAveraging):
         h_X, _, _ = self.create_frame(X, mask)
         mask = mask.unsqueeze(1).expand(-1, 8, -1).reshape(B*8, N)
 
-        # h_X = h_X.repeat(1,1,20)
+        h_X = h_X.repeat(1,1,15)
 
         # if unique_residues is not None and h_S is not None:
         #     counts = torch.tensor([3 for i in range(h_S.shape[1])])

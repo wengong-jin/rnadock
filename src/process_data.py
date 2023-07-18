@@ -12,7 +12,11 @@ import pandas as pd
 import pickle
 import urllib.request
 from scipy.spatial.distance import cdist
+import scipy
 import tqdm
+
+from prody import *
+from pylab import *
 
 protein_letters_3to1 = {'CYS': 'C', 'ASP': 'D', 'SER': 'S', 'GLN': 'Q', 'LYS': 'K',
      'ILE': 'I', 'PRO': 'P', 'THR': 'T', 'PHE': 'F', 'ASN': 'N', 
@@ -153,6 +157,12 @@ def create_peptide_datapoint(filepath):
     else:
         return None
 
+def get_normal_modes(pdb_id, calphas):
+    gnm = GNM(f'{pdb_id} analysis')
+    gnm.buildKirchhoff(calphas)
+    gnm.calcModes(50, zeros=False) # calculating 50 nontrivial modes, and keeping 0 trivial modes
+    return gnm.getEigvecs() # [num residues, 50]
+
 def create_geobind_datapoint(line):
     # input is one line in txt file
     pdb_id = line.split(":")[0]
@@ -170,10 +180,15 @@ def create_geobind_datapoint(line):
 
     dps = []
 
-    for lc in ligand_chains:
-        chain_1 = structure[structure.chain_id == protein_chain]
-        chain_2 = structure[structure.chain_id == lc]
+    chain_1 = structure[structure.chain_id == protein_chain]
+    full_target_coords = chain_1.coord
+    target_coords = chain_1[chain_1.atom_name == 'CA'].coord # alpha carbons
+    res_ids = chain_1[chain_1.atom_name == 'CA'].res_id # alpha carbons
+    target_seq = chain_1[chain_1.atom_name == 'CA'].res_name # alpha carbons
+    normal_modes = get_normal_modes(pdb_id, target_coords)
 
+    for lc in ligand_chains:
+        chain_2 = structure[structure.chain_id == lc]
         lc = lc[:-1]
         
         bound_res_ids = " ".join(line[line.index(f"{protein_chain}_{lc}"):].split(" ")[1:])
@@ -183,16 +198,6 @@ def create_geobind_datapoint(line):
             bound_res_ids = bound_res_ids[:-1]
         bound_res_ids = [int(s[1:]) for s in bound_res_ids.split(" ")]
 
-        full_target_coords = chain_1.coord
-        # target_coords = chain_1[biotite.structure.filter_backbone(chain_1)].coord # all backbone coordinates
-        target_coords = chain_1[chain_1.atom_name == 'CA'].coord # alpha carbons
-        # target_coords = chain_1.coord # full atom
-        # res_ids = chain_1[biotite.structure.filter_backbone(chain_1)].res_id # all backbone coordinates
-        res_ids = chain_1[chain_1.atom_name == 'CA'].res_id # alpha carbons
-        # res_ids = chain_1.res_id # full atom
-        # target_seq = chain_1[biotite.structure.filter_backbone(chain_1)].res_name # all backbone coordinates
-        target_seq = chain_1[chain_1.atom_name == 'CA'].res_name # alpha carbons
-        # target_seq = chain_1.res_name # full atom
         rna_coords = chain_2[chain_2.atom_name == "C3\'"].coord
         rna_seq = chain_2[chain_2.atom_name == "C3\'"].res_name
         name = f"{pdb_id}_{protein_chain}_{lc}"
@@ -226,11 +231,7 @@ def create_geobind_datapoint(line):
             else:
                 clean_rna_seq.append('Z') #nonstandard nucleotide
 
-        if sum(residue_mask) == 0:
-            print(pdb_id)
-            exit()
-
-        dps.append({'pdb': name, 'target_coords': target_coords, 'ligand_seq': ''.join(clean_rna_seq), 'ligand_coords': rna_coords, 'target_seq': ''.join(clean_target_seq), 'residue_binary_mask': residue_mask, 'atom_binary_mask': atom_mask, 'res_ids': np.array(res_ids)})
+        dps.append({'pdb': name, 'target_coords': target_coords, 'ligand_seq': ''.join(clean_rna_seq), 'ligand_coords': rna_coords, 'target_seq': ''.join(clean_target_seq), 'residue_binary_mask': residue_mask, 'atom_binary_mask': atom_mask, 'res_ids': np.array(res_ids), 'normal_modes': normal_modes})
 
     return dps        
 

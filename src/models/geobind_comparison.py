@@ -32,17 +32,18 @@ from ipa import IPAClassificationModel
 sys.path.append("/home/dnori/rnadock/src/data")
 from data import ProteinDataset, ProteinBinaryDataset, ProteinMulticlassDataset
 
-def step(model, prot_coords, prot_seqs, pdb, y_residue, y_atom, res_ids, esm_repr=None):
+def step(model, prot_coords, prot_seqs, pdb, y_residue, y_atom, res_ids, normal_modes, esm_repr=None):
     # train_dataset.max_protein_length = test_dataset.max_protein_length (same for rna length)
     if esm_repr is not None:
         token_repr = esm_repr[pdb[0]]
     else:
         token_repr = None
-    loss, y_hat, y_batch, mask = model(prot_coords, None, prot_seqs, None, y_residue, res_ids, train_dataset.max_protein_length, train_dataset.max_rna_length, token_repr)
+    loss, y_hat, y_batch, mask = model(prot_coords, None, prot_seqs, None, y_residue, res_ids, normal_modes, train_dataset.max_protein_length, train_dataset.max_rna_length, token_repr)
     y_batch = y_batch[mask.bool()].cpu().detach().numpy()
     y_hat = torch.sigmoid(y_hat)
     y_hat = y_hat[mask.bool()].cpu().detach().numpy()
-    return y_batch, y_hat, loss, prot_seqs, pdb
+    normal_modes = normal_modes[0,mask.bool(),0].cpu().detach().numpy()
+    return y_batch, y_hat, loss, prot_seqs, pdb, normal_modes
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
@@ -53,7 +54,7 @@ if __name__ == "__main__":
     parser.add_argument('--mlp_output_dim', type=int, default=1)
     parser.add_argument('--dropout', type=float, default=0.1)
     parser.add_argument('--lr', type=float, default=1e-3)
-    parser.add_argument('--epochs', type=int, default=10)
+    parser.add_argument('--epochs', type=int, default=25)
     parser.add_argument('--seed', type=int, default=7)
     parser.add_argument('--anneal_rate', type=float, default=0.95)
     parser.add_argument('--batch_size', type=int, default=1)
@@ -134,7 +135,7 @@ if __name__ == "__main__":
             'loss': loss,
             }, filename)
 
-    checkpoint = torch.load(f"/home/dnori/rnadock/output/model_checkpoints/graphbind_comparison/epoch_9.pt")
+    checkpoint = torch.load(f"/home/dnori/rnadock/output/model_checkpoints/graphbind_comparison/epoch_6.pt")
     model.load_state_dict(checkpoint['model_state_dict'])
 
     # hold out test set
@@ -145,27 +146,30 @@ if __name__ == "__main__":
     sequences = []
     predictions = []
     ground_truth = []
+    normal_modes = []
 
     file = open('src/data/graphbind_test_esm_embeddings.pickle', 'rb')
     esm_repr_test = pickle.load(file)
     file.close() 
 
     for i in tqdm(range(0, num_test_points, args.batch_size)):
-        y_batch, y_hat, loss, prot_seq_batch, pdb_batch = step(model, *test_dataset.get_batch(i, args.batch_size, "Test"), esm_repr=esm_repr_test)
+        y_batch, y_hat, loss, prot_seq_batch, pdb_batch, nm = step(model, *test_dataset.get_batch(i, args.batch_size, "Test"), esm_repr=esm_repr_test)
         true_vals_test.extend(y_batch.tolist())
         pred_vals_test.extend(y_hat.tolist())
-        predictions.append(y_batch.tolist())
-        ground_truth.append(y_hat.tolist())
+        predictions.append(y_hat.tolist())
+        ground_truth.append(y_batch.tolist())
         sequences.append(prot_seq_batch[0])
+        normal_modes.append(nm.tolist())
 
     data = {'sequences': sequences,
          'predictions': predictions,
-         'ground_truth': ground_truth}
+         'ground_truth': ground_truth,
+         'normal_modes': normal_modes}
 
     df = pd.DataFrame.from_dict(data)
     df.to_csv('output/graphbind_comparison/visualization_pred_info.csv')
 
     scores_df = pd.DataFrame({'label':true_vals_test,'score':pred_vals_test})
     model.blm.add_model(f'test', scores_df)
-    model.blm.plot_roc(model_names=['test'],params={"save":True,"prefix":f"output/graphbind_comparison/test_10th_epoch_"})
-    model.blm.plot(model_names=['test'],chart_types=[1,2,3,4,5],params={"save":True,"prefix":f"output/graphbind_comparison/test_10th_epoch_"})
+    model.blm.plot_roc(model_names=['test'],params={"save":True,"prefix":f"output/graphbind_comparison/test_7th_epoch_"})
+    model.blm.plot(model_names=['test'],chart_types=[1,2,3,4,5],params={"save":True,"prefix":f"output/graphbind_comparison/test_7th_epoch_"})

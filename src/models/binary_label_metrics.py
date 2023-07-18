@@ -357,7 +357,7 @@ class BinaryLabelMetrics:
         def plot_confusion_matrix_bar_chart(inp_df, mname):
             labels = inp_df["label"].values
             scores = inp_df["score"].values
-            thresh = params.get("chart_thresh", 0.5)
+            thresh = params.get("chart_thresh", 0.25)
 
             thresh_scores = np.copy(scores)
             thresh_scores[thresh_scores < thresh] = 0

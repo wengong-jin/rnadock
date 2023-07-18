@@ -52,7 +52,7 @@ class FAEClassificationModel(nn.Module):
         self.esm_model.eval()
         self.args = args
 
-    def forward(self, prot_X, ligand_X, seqs, ligand_seqs, y_batch, res_ids, max_prot_seq_len, max_ligand_seq_len, token_repr=None):
+    def forward(self, prot_X, ligand_X, seqs, ligand_seqs, y_batch, res_ids, normal_modes, max_prot_seq_len, max_ligand_seq_len, token_repr=None):
         
         esm_input = []
         pad_mask_atom = torch.from_numpy(np.ones((prot_X.shape[0],max_prot_seq_len)))
@@ -97,6 +97,8 @@ class FAEClassificationModel(nn.Module):
                         token_repr_ligand[i,:,:] = results_ligand["representations"][33][:,1:-1,:]
 
         self.protein_encoder.cuda()
+        normal_modes = normal_modes.repeat(1,1,10) # 500 length feature
+        token_repr = torch.cat((token_repr, normal_modes), dim=-1)
         h_prot = self.protein_encoder(prot_X.cuda(), h_S=token_repr, unique_residues=res_ids, mask=pad_mask_atom.cuda()) # h_prot: (batch sz, max prot seq len, encoder hidden dim)
         if ligand_X:
             full_mask = torch.unsqueeze(torch.mm(pad_mask.T, pad_mask_ligand).flatten(), dim=0)
@@ -182,7 +184,7 @@ class FAEncoder(FrameAveraging):
         super(FAEncoder, self).__init__()
         if mol_type == "protein":
             self.encoder = SRUpp(
-                    args.esm_emb_size + 3*15,
+                    args.esm_emb_size + 3*15 + 50*10, # esm + coords + normal modes
                     args.encoder_hidden_size // 2,
                     args.encoder_hidden_size // 2,
                     num_layers=args.depth,

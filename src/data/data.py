@@ -42,6 +42,8 @@ class ProteinDataset():
                 entry['target_coords'] = torch.from_numpy(entry['target_coords']).float()
             if type(entry['res_ids']) != torch.Tensor:
                 entry['res_ids'] = torch.from_numpy(entry['res_ids'])
+            if type(entry['normal_modes']) != torch.Tensor:
+                entry['normal_modes'] = torch.from_numpy(entry['normal_modes'])
             if type(entry['atom_binary_mask']) != torch.Tensor:
                 entry['atom_binary_mask'] = torch.tensor(entry['atom_binary_mask'])
             if type(entry['residue_binary_mask']) != torch.Tensor:
@@ -136,7 +138,7 @@ class ProteinDataset():
         atom_masks = []
         pdbs = []
         res_ids = []
-        # atom_loss_masks = []
+        normal_modes = []
 
         for entry in tqdm.tqdm(self.raw_data, desc = f'prep geobind {split}'):
             target_coords.append(entry['target_coords'])
@@ -147,7 +149,7 @@ class ProteinDataset():
             residue_masks.append(entry['residue_binary_mask'])
             pdbs.append(entry['pdb'])
             res_ids.append(entry['res_ids'])
-            # atom_loss_masks.append(entry['atom_loss_mask'])
+            normal_modes.append(entry['normal_modes'])
 
         self.data[split]["Protein"]["Coords"] = target_coords
         self.data[split]["Protein"]["Seqs"] = target_seqs
@@ -157,7 +159,7 @@ class ProteinDataset():
         self.data[split]["Binary_Masks"]["Residue"] = residue_masks
         self.data[split]["Binary_Masks"]["Atom"] = atom_masks
         self.data[split]["PDB"] = pdbs
-        # self.data[split]["Atom_Loss_Masks"] = atom_loss_masks
+        self.data[split]["Normal_Modes"] = normal_modes
 
         self.max_protein_length = max([coord.shape[0] for coord in target_coords])
         self.max_rna_length = max([coord.shape[0] for coord in ligand_coords])
@@ -294,15 +296,18 @@ class ProteinBinaryDataset(ProteinDataset):
         binary_y_atom = torch.zeros(len(self.data[split]["Binary_Masks"]["Atom"]), self.max_protein_length, 1)
         # binary_y_residue = torch.zeros(len(self.data[split]["Binary_Masks"]["Residue"]), self.max_protein_length//3, 1)
         binary_y_residue = torch.zeros(len(self.data[split]["Binary_Masks"]["Residue"]), self.max_protein_length, 1)
+        normal_modes = torch.zeros(len(self.data[split]["Protein"]["Coords"]), self.max_protein_length, 50)
         for i in range(len(self.data[split]["Protein"]["Coords"])):
             prot_len = len(self.data[split]["Protein"]["Coords"][i])
+            num_nm = self.data[split]["Normal_Modes"][i].shape[1]
             protein_X[i, :prot_len, :] = self.data[split]["Protein"]["Coords"][i]
             binary_y_atom[i, :prot_len, 0] = self.data[split]["Binary_Masks"]["Atom"][i]
-            # binary_y_residue[i, :prot_len//3, 0] = self.data[split]["Binary_Masks"]["Residue"][i]
             binary_y_residue[i, :prot_len, 0] = self.data[split]["Binary_Masks"]["Residue"][i]
+            normal_modes[i, :prot_len, :num_nm] = self.data[split]["Normal_Modes"][i]
         self.data[split]["Protein"]["Coords"] = protein_X
         self.data[split]["Binary_Masks"]["Residue"] = binary_y_residue
         self.data[split]["Binary_Masks"]["Atom"] = binary_y_atom
+        self.data[split]["Normal_Modes"] = normal_modes
 
     def get_batch(self, idx, batch_size, split):
         data = self.data[split]
@@ -314,6 +319,7 @@ class ProteinBinaryDataset(ProteinDataset):
             binary_y_atom = data["Binary_Masks"]["Atom"][idx:idx+batch_size]
             binary_y_residue = data["Binary_Masks"]["Residue"][idx:idx+batch_size]
             res_ids = data["Protein"]["Res_Ids"][idx:idx+batch_size]
+            normal_modes = data["Normal_Modes"][idx:idx+batch_size]
         else:
             prot_X = data["Protein"]["Coords"][idx:]
             prot_seqs = data["Protein"]["Seqs"][idx:]
@@ -321,8 +327,9 @@ class ProteinBinaryDataset(ProteinDataset):
             binary_y_atom = data["Binary_Masks"]["Atom"][idx:]
             binary_y_residue = data["Binary_Masks"]["Residue"][idx:]
             res_ids = data["Protein"]["Res_Ids"][idx:]
+            normal_modes = data["Normal_Modes"][idx:]
 
-        return prot_X, prot_seqs, pdb, binary_y_residue, binary_y_atom, res_ids
+        return prot_X, prot_seqs, pdb, binary_y_residue, binary_y_atom, res_ids, normal_modes
 
 class ProteinMulticlassDataset(ProteinDataset):
     def __init__(self, path_to_pickle):

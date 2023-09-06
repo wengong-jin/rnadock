@@ -189,7 +189,7 @@ def create_geobind_datapoint(line):
 
     for lc in ligand_chains:
         chain_2 = structure[structure.chain_id == lc]
-        lc = lc[:-1]
+        # lc = lc[:-1] # for graphbind
         
         bound_res_ids = " ".join(line[line.index(f"{protein_chain}_{lc}"):].split(" ")[1:])
         if ":" in bound_res_ids:
@@ -315,10 +315,10 @@ if __name__ == "__main__":
     # with open('src/data/dataset_rna_2.pickle', 'wb') as handle:
     #     pickle.dump(list(dataset.values()), handle)
 
-    file1 = open("/home/dnori/rnadock/GeoBind/Dataset_lists/GraphBind/RNA-117_Test.txt", "r")
+    file1 = open("/home/dnori/rnadock/GeoBind/Dataset_lists/GeoBind/RNA-663_Train.txt", "r")
     lines = file1.readlines()
     datapoints = []
     for line in tqdm.tqdm(lines):
         datapoints.extend(create_geobind_datapoint(line))
-    with open('src/data/graphbind_test_rna_alphacarbons.pickle', 'wb') as handle:
+    with open('src/data/geobind_train_rna_alphacarbons.pickle', 'wb') as handle:
         pickle.dump(datapoints, handle)

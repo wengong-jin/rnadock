@@ -54,7 +54,7 @@ if __name__ == "__main__":
     parser.add_argument('--mlp_output_dim', type=int, default=1)
     parser.add_argument('--dropout', type=float, default=0.1)
     parser.add_argument('--lr', type=float, default=1e-3)
-    parser.add_argument('--epochs', type=int, default=25)
+    parser.add_argument('--epochs', type=int, default=10)
     parser.add_argument('--seed', type=int, default=7)
     parser.add_argument('--anneal_rate', type=float, default=0.95)
     parser.add_argument('--batch_size', type=int, default=1)
@@ -66,8 +66,8 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     torch.manual_seed(args.seed)
-    train_pkl_path = f"./src/data/graphbind_train_rna_alphacarbons.pickle"
-    test_pkl_path = f"./src/data/graphbind_test_rna_alphacarbons.pickle"
+    train_pkl_path = f"./src/data/geobind_train_rna_alphacarbons.pickle"
+    test_pkl_path = f"./src/data/geobind_test_rna_alphacarbons.pickle"
 
     train_dataset = ProteinBinaryDataset(train_pkl_path)
     train_dataset.prep_raw_data()
@@ -101,7 +101,7 @@ if __name__ == "__main__":
     ground_truth = []
     pdbs = []
 
-    file = open('src/data/graphbind_train_esm_embeddings.pickle', 'rb')
+    file = open('src/data/geobind_train_esm_embeddings.pickle', 'rb')
     esm_repr = pickle.load(file)
     file.close() 
 
@@ -110,7 +110,7 @@ if __name__ == "__main__":
         true_vals = []
         pred_vals = []
         for i in tqdm(range(0, num_train_points, args.batch_size)):
-            y_batch, y_hat, loss, prot_seq_batch, pdb_batch = step(model, *train_dataset.get_batch(i, args.batch_size, "Train"), esm_repr=esm_repr)
+            y_batch, y_hat, loss, prot_seq_batch, pdb_batch, nm = step(model, *train_dataset.get_batch(i, args.batch_size, "Train"), esm_repr=esm_repr)
             true_vals.extend(y_batch.tolist())
             pred_vals.extend(y_hat.tolist())
 
@@ -125,9 +125,9 @@ if __name__ == "__main__":
 
         scores_df = pd.DataFrame({'label':true_vals,'score':pred_vals})
         model.blm.add_model(f'epoch_{e}', scores_df)
-        model.blm.plot_roc(model_names=[f'epoch_{e}'],params={"save":True,"prefix":f"output/graphbind_comparison/epoch_{e}_"})
+        model.blm.plot_roc(model_names=[f'epoch_{e}'],params={"save":True,"prefix":f"output/geobind_comparison/epoch_{e}_"})
 
-        filename = f'output/model_checkpoints/graphbind_comparison/epoch_{e}.pt'
+        filename = f'output/model_checkpoints/geobind_comparison/epoch_{e}.pt'
         torch.save({
             'epoch': e,
             'model_state_dict': model.state_dict(),
@@ -135,7 +135,7 @@ if __name__ == "__main__":
             'loss': loss,
             }, filename)
 
-    checkpoint = torch.load(f"/home/dnori/rnadock/output/model_checkpoints/graphbind_comparison/epoch_6.pt")
+    checkpoint = torch.load(f"/home/dnori/rnadock/output/model_checkpoints/geobind_comparison/epoch_7.pt")
     model.load_state_dict(checkpoint['model_state_dict'])
 
     # hold out test set
@@ -148,7 +148,7 @@ if __name__ == "__main__":
     ground_truth = []
     normal_modes = []
 
-    file = open('src/data/graphbind_test_esm_embeddings.pickle', 'rb')
+    file = open('src/data/geobind_test_esm_embeddings.pickle', 'rb')
     esm_repr_test = pickle.load(file)
     file.close() 
 
@@ -167,9 +167,9 @@ if __name__ == "__main__":
          'normal_modes': normal_modes}
 
     df = pd.DataFrame.from_dict(data)
-    df.to_csv('output/graphbind_comparison/visualization_pred_info.csv')
+    df.to_csv('output/geobind_comparison/visualization_pred_info.csv')
 
     scores_df = pd.DataFrame({'label':true_vals_test,'score':pred_vals_test})
     model.blm.add_model(f'test', scores_df)
-    model.blm.plot_roc(model_names=['test'],params={"save":True,"prefix":f"output/graphbind_comparison/test_7th_epoch_"})
-    model.blm.plot(model_names=['test'],chart_types=[1,2,3,4,5],params={"save":True,"prefix":f"output/graphbind_comparison/test_7th_epoch_"})
+    model.blm.plot_roc(model_names=['test'],params={"save":True,"prefix":f"output/geobind_comparison/test_8th_epoch_"})
+    model.blm.plot(model_names=['test'],chart_types=[1,2,3,4,5],params={"save":True,"prefix":f"output/geobind_comparison/test_8th_epoch_"})
